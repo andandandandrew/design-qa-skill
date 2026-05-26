@@ -1,0 +1,8 @@
+# Dependencies
+node_modules/
+
+# Generated runtime output (browser profiles, logs, screenshots, artifacts)
+design-qa-sessions/
+
+# OS
+.DS_Store
