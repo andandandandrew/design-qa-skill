@@ -62,10 +62,15 @@ export async function buildArtifact({ sessionDir, session, outPath }) {
       pins: view.pins.map((p, i) => ({
         id: p.id,
         index: i + 1,
-        xPct: vp.width ? (p.x / vp.width) * 100 : 0,
-        yPct: docHeightCss ? (p.y / docHeightCss) * 100 : 0,
+        // %-at-rest is canonical (Spike B); fall back to the px→% conversion
+        // for any legacy/unsealed pin that predates normalization.
+        xPct: typeof p.xPct === 'number' ? p.xPct : (vp.width ? (p.x / vp.width) * 100 : 0),
+        yPct: typeof p.yPct === 'number' ? p.yPct : (docHeightCss ? (p.y / docHeightCss) * 100 : 0),
         note: p.note || '',
         category: p.category || null,
+        author: p.author || null,
+        status: p.status || 'open',
+        resolvedNote: p.resolvedNote || null,
         createdAt: p.createdAt,
       })),
     });
