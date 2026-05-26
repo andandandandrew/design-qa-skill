@@ -171,7 +171,7 @@ doesn't bake in a transport.
 
 ---
 
-## 6. Thin Spike C — localhost serving (shape only)
+## 6. Spike C — localhost serving + the writer model (decided)
 
 Enough to phase Phase 4; not an implementation.
 
@@ -181,14 +181,50 @@ Enough to phase Phase 4; not an implementation.
   `SessionStore` · `GET /api/events` (SSE) for live updates.
 - Browser opened via `open` (macOS) / `xdg-open`.
 
-**Open question to resolve in Phase 4 (flagged here so we design for it):** today the daemon
-is **per-session** and owns Playwright. But the console must (a) list *all* sessions, and
-(b) work when there is **no live capture at all** (PM review; manual-only project). So the
-console server should likely be a **lightweight server decoupled from the capture daemon**
-— launchable without Playwright, reading the sessions dir, and *coordinating* with an active
-capture daemon (if any) rather than being it. Phase 4 decides: separate console server vs.
-the active daemon doubling as host. The editor and `store` seam (§3) are built to not care
-which.
+### The writer model (resolved — do not re-litigate as a write-handoff)
+
+**There is exactly one per-session server process, and it is the *sole writer* of that
+session's `session.json`. Playwright is an optional attachment to that process, not a
+separate writer.** The "capture daemon" and the "console server" are the **same process**
+wearing two hats; browser capture is a module it can attach/detach, not a second owner.
+
+```
+   browser overlay pins ─┐
+                         ├─▶  SESSION SERVER (sole writer) ─▶ session.json
+   manual upload (HTTP) ─┘     • serves the console over localhost
+                              • Playwright attached only for browser capture
+```
+
+Consequences (all desirable, and the reason for this shape):
+
+- **Both input paths feed one session.** A browser-captured screen (`source: 'browser'`)
+  and an uploaded screen (`source: 'manual'`) are just different entries in the same
+  `session.views[]`. The terminal-triggered session is the container; both paths add screens.
+- **The writer never switches.** What toggles is whether a browser is *attached*
+  (attach/detach is safe — just driving/closing a Chromium tab). There is no write-ownership
+  handoff between processes, so the two-writers-racing-a-file failure mode never arises.
+  Node is single-threaded and the store persists atomically (temp-file + rename), so a
+  browser pin and a manual upload arriving together simply serialize through the event loop.
+- **You can capture in the browser and upload manually in the same session, at the same
+  time.** They don't interact — they're separate screens.
+- **The console still runs without a browser.** Playwright is lazy-attached, so review-only
+  and manual-only (React Native) projects never boot Chromium. (This preserves the property
+  the earlier "decoupled" framing was reaching for, without a second process.)
+
+### Live-screen ownership rule (the one boundary to enforce)
+
+To avoid two surfaces editing the *same* pins:
+
+- The **currently-live (unsealed) browser screen is browser-owned** — its pins are
+  page-pixel coords on the live DOM, edited in the overlay. The console renders it as
+  **● live / locked** (read-only).
+- **Everything sealed, plus every manual screen, is console-editable** (a frozen image with
+  `%` pins).
+
+The moment a live screen seals (navigate-away or **Done**), it converts to `%` (§4) and the
+console can edit it too. So the browser owns exactly the screen you're actively capturing;
+the console owns everything frozen. The editor and `store` seam (§3) are agnostic to all of
+this — they only ever see the store interface.
 
 ---
 
