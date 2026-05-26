@@ -105,6 +105,16 @@ The console:
 socket) runs a small localhost HTTP server: static console assets + a session/data
 endpoint + screenshot files, with SSE or polling for live updates. (See new Spike C.)
 
+**Why two surfaces and not one app-frame embedding the target site (rejected).** The
+tempting "single frame" — load the QA target inside our own app shell (iframe) and put
+everything in one window — is blocked in the general case: real apps send
+`X-Frame-Options: DENY` / CSP `frame-ancestors 'self'`, and cross-origin embedding also
+severs our ability to inject the overlay, read pin coordinates, and screenshot the page.
+For a tool meant to QA arbitrary running apps (often behind auth/SSO), framing the target
+is unreliable. So capture stays as injected chrome *in the live page* (what we have), and
+review/authoring lives in a *separate* localhost console. Two surfaces is a constraint, not
+a preference — do not re-litigate as "just iframe it."
+
 ---
 
 ## Capture modes
