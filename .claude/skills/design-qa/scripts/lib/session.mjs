@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sessionSubPaths } from './paths.mjs';
-import { pagePxToPct, pngDimensions } from './coords.mjs';
+import { pagePxToPct, pngDimensions, clampPct } from './coords.mjs';
 
 const SCHEMA_VERSION = 2;
 
@@ -92,6 +92,11 @@ export class SessionStore {
   constructor(sessionDir, doc) {
     this.sessionDir = sessionDir;
     this.doc = doc;
+    // Single broadcast point. Both browser-binding mutations (px) and HTTP
+    // console mutations (%) flow through persist(), so every listener (the
+    // SSE transport in Phase 4) sees all changes regardless of source.
+    this._listeners = new Set();
+    this._seq = 0;
   }
 
   static async load(sessionDir) {
@@ -101,8 +106,29 @@ export class SessionStore {
     return store;
   }
 
+  /** subscribe(fn) → unsubscribe(). fn receives a monotonic seq. */
+  subscribe(fn) {
+    this._listeners.add(fn);
+    return () => this._listeners.delete(fn);
+  }
+
   async persist() {
     await writeSession(this.sessionDir, this.doc);
+    const seq = ++this._seq;
+    for (const fn of [...this._listeners]) {
+      try { fn(seq); } catch (err) { console.warn('session listener error:', err.message); }
+    }
+  }
+
+  /**
+   * Live-screen ownership guard (UX §6). The currently-live unsealed browser
+   * screen is browser-owned (px pins edited in the overlay); the console must
+   * not mutate it. Everything sealed, and every manual screen, is editable.
+   */
+  _assertConsoleEditable(view) {
+    if (view.source === 'browser' && !view.sealedAt) {
+      throw new Error(`view ${view.id} is live (browser-owned); not console-editable`);
+    }
   }
 
   findViewByUrl(url) {
@@ -208,6 +234,67 @@ export class SessionStore {
       }
     }
     throw new Error(`pin ${pinId} not found`);
+  }
+
+  /** Locate a pin and its owning view. Used by the console mutation layer. */
+  findPin(pinId) {
+    for (const view of this.doc.views) {
+      const pin = view.pins.find((p) => p.id === pinId);
+      if (pin) return { view, pin };
+    }
+    return { view: null, pin: null };
+  }
+
+  // --- Console-facing mutations (%-at-rest) -------------------------------
+  // These operate on sealed/manual screens only; ownership is enforced at the
+  // HTTP boundary via _assertConsoleEditable before dispatch. Console pins are
+  // born with xPct/yPct and carry no page-px x/y (unlike live browser pins).
+
+  async createPinPct({ viewId, xPct, yPct, note = '', category = null, author = null }) {
+    const view = this.findViewById(viewId);
+    if (!view) throw new Error(`view ${viewId} not found`);
+    const pin = {
+      id: newId('pin'),
+      viewId,
+      xPct: clampPct(xPct),
+      yPct: clampPct(yPct),
+      note: note || '',
+      category,
+      author,
+      status: 'open',
+      resolvedNote: null,
+      createdAt: new Date().toISOString(),
+    };
+    view.pins.push(pin);
+    await this.persist();
+    return pin;
+  }
+
+  async movePinPct({ pinId, xPct, yPct }) {
+    const { pin } = this.findPin(pinId);
+    if (!pin) throw new Error(`pin ${pinId} not found`);
+    pin.xPct = clampPct(xPct);
+    pin.yPct = clampPct(yPct);
+    await this.persist();
+    return pin;
+  }
+
+  async editPin({ pinId, note, category }) {
+    const { pin } = this.findPin(pinId);
+    if (!pin) throw new Error(`pin ${pinId} not found`);
+    if (typeof note === 'string') pin.note = note;
+    if (category !== undefined) pin.category = category;
+    await this.persist();
+    return pin;
+  }
+
+  async resolvePin({ pinId, resolved, resolvedNote = null }) {
+    const { pin } = this.findPin(pinId);
+    if (!pin) throw new Error(`pin ${pinId} not found`);
+    pin.status = resolved ? 'resolved' : 'open';
+    pin.resolvedNote = resolved ? resolvedNote : null;
+    await this.persist();
+    return pin;
   }
 
   /**

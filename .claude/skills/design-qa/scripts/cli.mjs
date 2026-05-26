@@ -69,8 +69,8 @@ async function cmdStart(opts) {
   await writeSession(sessionDir, session);
 
   const logFd = fs.openSync(subs.logFile, 'a');
-  const daemonPath = path.join(scriptsDir, 'daemon.mjs');
-  const child = spawn(process.execPath, [daemonPath, '--session-dir', sessionDir], {
+  const serverPath = path.join(scriptsDir, 'session-server.mjs');
+  const child = spawn(process.execPath, [serverPath, '--session-dir', sessionDir], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
     env: { ...process.env, NODE_NO_WARNINGS: '1' },
@@ -82,17 +82,19 @@ async function cmdStart(opts) {
   if (!socketReady) {
     let logTail = '';
     try { logTail = (await fsp.readFile(subs.logFile, 'utf8')).slice(-2000); } catch {}
-    die(`daemon failed to start within 30s\n--- daemon.log tail ---\n${logTail}`);
+    die(`session server failed to start within 30s\n--- daemon.log tail ---\n${logTail}`);
   }
 
+  let consoleUrl = null;
   try {
     const ping = await request(sessionDir, { type: 'ping' }, { timeoutMs: 5_000 });
-    if (!ping.ready) die(`daemon not ready: ${JSON.stringify(ping)}`);
+    if (!ping.ready) die(`session server not ready: ${JSON.stringify(ping)}`);
+    consoleUrl = ping.consoleUrl || null;
   } catch (err) {
-    die(`daemon ping failed: ${err.message}`);
+    die(`session server ping failed: ${err.message}`);
   }
 
-  process.stdout.write(JSON.stringify({ sessionDir, pid: child.pid }) + '\n');
+  process.stdout.write(JSON.stringify({ sessionDir, pid: child.pid, consoleUrl }) + '\n');
 }
 
 async function listLiveSessions(root) {

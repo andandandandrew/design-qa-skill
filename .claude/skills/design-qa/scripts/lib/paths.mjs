@@ -7,6 +7,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 export const scriptsDir = path.resolve(here, '..');
 export const overlayInjectPath = path.join(scriptsDir, 'overlay', 'inject.js');
 export const artifactBuilderPath = path.join(scriptsDir, 'artifact', 'build.mjs');
+// The buildless console assets the session server serves over localhost.
+export const consoleDir = path.join(scriptsDir, 'console');
 
 // macOS caps Unix-domain socket paths at ~104 bytes, so we can't put the socket
 // inside a deeply-nested session dir. Derive a short, stable name in os.tmpdir()
@@ -35,6 +37,9 @@ export function sessionSubPaths(sessionDir) {
     socket: socketPathFor(sessionDir),
     pidFile: path.join(sessionDir, 'daemon.pid'),
     logFile: path.join(sessionDir, 'daemon.log'),
+    // The live console URL for this session, written by the session server so
+    // sibling servers can list it (the session switcher). Removed on exit.
+    consoleUrlFile: path.join(sessionDir, 'console.url'),
     browserProfile: path.join(sessionDir, 'browser-profile'),
     screenshotsDir: path.join(sessionDir, 'screenshots'),
     artifact: path.join(sessionDir, 'artifact.html'),

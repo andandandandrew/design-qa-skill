@@ -1,6 +1,6 @@
 # /design-qa start &lt;session-name&gt;
 
-Start a new design QA session. Spawns a detached Node daemon that owns a headed Chromium browser with the annotation overlay injected. Creates a session directory under `<cwd>/design-qa-sessions/`.
+Start a new design QA session. Spawns a detached Node **session server** that (1) serves the buildless review/authoring console over `127.0.0.1`, and (2) attaches a headed Chromium browser with the annotation overlay injected for live capture. Creates a session directory under `<cwd>/design-qa-sessions/`.
 
 ## Steps
 
@@ -42,10 +42,10 @@ node .claude/skills/design-qa/scripts/cli.mjs start --name <session-name> --root
 
 The CLI:
 - Creates the session directory (`<root>/<timestamp>-<name>/`).
-- Spawns `daemon.mjs` detached, with stdout/stderr redirected to `<session-dir>/daemon.log`.
-- Waits up to 30s for the daemon to bind its Unix socket and report `ready`.
-- Prints a single JSON line to stdout: `{"sessionDir": "...", "pid": N}`.
-- Exits non-zero with stderr on failure (daemon crashed, socket never appeared, etc.).
+- Spawns `session-server.mjs` detached, with stdout/stderr redirected to `<session-dir>/daemon.log`.
+- Waits up to 30s for the server to bind its Unix socket and report `ready`.
+- Prints a single JSON line to stdout: `{"sessionDir": "...", "pid": N, "consoleUrl": "http://127.0.0.1:PORT/"}`.
+- Exits non-zero with stderr on failure (server crashed, socket never appeared, etc.).
 
 Capture the JSON. If the command exits non-zero, surface `daemon.log` contents and stop.
 
@@ -54,8 +54,8 @@ Capture the JSON. If the command exits non-zero, surface `daemon.log` contents a
 Tell the designer (concise — they're about to switch to the browser):
 
 - Session directory: `<sessionDir>` (one line, full path)
-- The Chromium window is open at about:blank — navigate to the app
-- Click the **"Add pin"** button in the overlay (top-right of the page) to start placing pins
+- The review **console** opened automatically at `<consoleUrl>` in your browser
+- A separate Chromium window is open at about:blank — navigate to the app, then click **"Add pin"** in the overlay to place pins; they appear live in the console
 - Run `/design-qa end` when done
 
-Do not narrate architecture. They just need the path and the next action.
+Do not narrate architecture. They just need the paths and the next action.

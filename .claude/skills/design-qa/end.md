@@ -23,12 +23,12 @@ If `$ARGUMENTS` contained a session name or path, pass it as `--session <value>`
 ## Step 1 — [SCRIPT] End the session
 
 The CLI:
-- Connects to `<session-dir>/daemon.sock`.
+- Connects to the session server's lifecycle socket (in `os.tmpdir()`, derived from the session dir).
 - Sends `{type: "end"}`.
-- The daemon screenshots the current page (if a view is active with pins but no screenshot), writes `screenshots/<view-id>.png`, builds `artifact.html`, removes the socket + PID file, and exits.
+- The server seals any active view (screenshots the current page if a view has pins but no screenshot), writes `screenshots/<view-id>.png`, builds `artifact.html`, stops the console HTTP server, removes the socket + PID + `console.url` files, and exits.
 - The CLI prints a JSON line: `{"sessionDir": "...", "artifact": "...", "viewCount": N, "pinCount": N}`.
 
-If the daemon is unreachable (socket missing, no response in 30s), the CLI tries a fallback: read `session.json` directly and build the artifact from whatever screenshots exist. Report this fallback in the result so the designer knows the live capture didn't happen.
+If the server is unreachable (socket missing, no response in 30s), the CLI tries a fallback: read `session.json` directly and build the artifact from whatever screenshots exist. Report this fallback in the result so the designer knows the live capture didn't happen.
 
 ## Step 2 — [LLM] Report
 

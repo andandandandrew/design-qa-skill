@@ -12,6 +12,21 @@ const DRAG_THRESHOLD = 4; // px before a press becomes a drag rather than a clic
 export function renderCanvas(ctx, root) {
   const { store, state } = ctx;
   const view = ctx.activeView();
+
+  // Live-screen ownership (§6): an unsealed browser screen is owned by the
+  // capture overlay (px pins on the live DOM). The console shows it locked —
+  // it has no %-positioned pins yet and must not be edited from here.
+  if (ctx.isLocked(view)) {
+    root.classList.remove('placing');
+    root.replaceChildren(el('div', { class: 'locked-screen' }, [
+      el('div', { class: 'locked-badge' }, 'Live'),
+      el('div', { class: 'locked-msg' },
+        'This screen is being captured in the browser. Pins are placed in the overlay; ' +
+        'it becomes editable here once sealed (navigate away or click Done).'),
+    ]));
+    return;
+  }
+
   root.classList.toggle('placing', !!state.placeMode);
 
   if (!view) { root.replaceChildren(el('div', { class: 'empty' }, 'No screen selected.')); return; }

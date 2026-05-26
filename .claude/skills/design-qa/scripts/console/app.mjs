@@ -1,4 +1,4 @@
-import { loadMemoryStore } from './store/memory-store.mjs';
+import { createStore } from './store/index.mjs';
 import { renderSidebar } from './ui/sidebar.mjs';
 import { renderCanvas } from './ui/canvas.mjs';
 import { renderComments } from './ui/comments.mjs';
@@ -11,7 +11,7 @@ const CATEGORIES = ['spacing', 'color', 'text', 'interaction', 'code-pattern', '
  * selected pin, place mode, filters) lives here, never in the store.
  */
 async function main() {
-  const store = await loadMemoryStore();
+  const store = await createStore();
 
   const state = {
     activeViewId: store.session.views[0]?.id || null,
@@ -28,6 +28,9 @@ async function main() {
     CATEGORIES,
     setState(patch) { Object.assign(state, patch); ctx.render(); },
     activeView() { return store.getView(state.activeViewId); },
+    /** Live-screen ownership (§6): an unsealed browser view is browser-owned
+     *  and read-only in the console — it's being captured in the overlay. */
+    isLocked(view) { return !!view && view.source === 'browser' && !view.sealedAt; },
     /** Filtered + sorted + index-stamped pins for a screen. Index follows
      *  creation order so marker numbers stay stable regardless of sort. */
     visiblePins(view) {
@@ -58,6 +61,7 @@ async function main() {
 
   // Topbar / toolbar wiring.
   document.getElementById('addPinBtn').addEventListener('click', () => {
+    if (ctx.isLocked(ctx.activeView())) return; // can't place on a live browser screen
     ctx.setState({ placeMode: !state.placeMode, composer: null });
   });
   document.getElementById('filterStatus').addEventListener('change', (e) => {
@@ -82,12 +86,55 @@ async function main() {
     }
   });
 
-  // Re-render on any store mutation (Phase 4: SSE drives the same path).
+  // Re-render on any store mutation. With HttpStore this is also driven by SSE
+  // (a pin placed in the capture browser refreshes the doc → re-render here).
   store.subscribe(() => ctx.render());
 
   document.getElementById('sessionName').textContent = store.session.name || 'Design QA';
 
+  // Minimal session switcher — only when served live (HttpStore exposes it).
+  if (typeof store.listSessions === 'function') setupSwitcher(ctx, store);
+
   ctx.render();
+}
+
+/**
+ * Populate a topbar dropdown from /api/sessions. Selecting another *live*
+ * session navigates to its own server's console; ended sessions are listed but
+ * not yet openable (cross-session editing is Phase 6 lookback).
+ */
+async function setupSwitcher(ctx, store) {
+  const sel = document.createElement('select');
+  sel.className = 'select';
+  sel.id = 'sessionSwitcher';
+  sel.title = 'Switch session';
+  document.getElementById('sessionName').after(sel);
+
+  const fill = async () => {
+    let sessions = [];
+    try { sessions = await store.listSessions(); } catch { return; }
+    sel.replaceChildren(...sessions.map((s) => {
+      const o = document.createElement('option');
+      o.value = s.consoleUrl || '';
+      o.dataset.current = String(!!s.current);
+      const dot = s.live ? '● ' : '';
+      o.textContent = `${dot}${s.name} · ${s.pinCount} pins · ${s.unresolved} open`;
+      if (s.current) o.selected = true;
+      if (!s.live && !s.current) o.disabled = true; // not openable yet
+      return o;
+    }));
+  };
+
+  sel.addEventListener('change', () => {
+    const url = sel.value;
+    const opt = sel.selectedOptions[0];
+    if (!opt || opt.dataset.current === 'true') return;
+    if (url) window.location.href = url;
+    else fill(); // not openable — restore selection
+  });
+
+  await fill();
+  store.subscribe(() => { fill(); }); // refresh counts/live state on changes
 }
 
 function renderTopbar(ctx) {
@@ -97,12 +144,22 @@ function renderTopbar(ctx) {
   document.getElementById('sessionMeta').textContent =
     `${views.length} ${views.length === 1 ? 'screen' : 'screens'} · ${pinCount} pins · ${open} open`;
   document.getElementById('sidebarMeta').textContent = `${views.length} ${views.length === 1 ? 'screen' : 'screens'}`;
+
+  // Live badge = a browser screen is currently being captured (unsealed).
+  const capturing = views.some((v) => v.source === 'browser' && !v.sealedAt);
+  const liveBadge = document.getElementById('liveBadge');
+  if (liveBadge) liveBadge.classList.toggle('on', capturing);
+
+  const locked = ctx.isLocked(ctx.activeView());
   const addPin = document.getElementById('addPinBtn');
-  addPin.classList.toggle('active', ctx.state.placeMode);
-  addPin.textContent = ctx.state.placeMode ? '✕ Cancel' : '+ Add pin';
-  document.getElementById('canvasHint').textContent = ctx.state.placeMode
-    ? 'Click on the screenshot to drop a pin.'
-    : 'Click a pin to read it. Drag to move.';
+  addPin.disabled = locked;
+  addPin.classList.toggle('active', ctx.state.placeMode && !locked);
+  addPin.textContent = ctx.state.placeMode && !locked ? '✕ Cancel' : '+ Add pin';
+  document.getElementById('canvasHint').textContent = locked
+    ? '● Live — being captured in the browser. Read-only here until sealed.'
+    : ctx.state.placeMode
+      ? 'Click on the screenshot to drop a pin.'
+      : 'Click a pin to read it. Drag to move.';
 }
 
 main().catch((err) => {

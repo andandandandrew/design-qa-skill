@@ -66,6 +66,13 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .canvas.placing .screenshot-wrapper { cursor: crosshair; }
 .screenshot { display: block; max-width: 100%; border-radius: 6px; }
 .no-screenshot { padding: 32px; background: var(--bg-2); border: 1px dashed var(--border); border-radius: 6px; color: var(--text-2); }
+.locked-screen { max-width: 420px; margin: 64px auto 0; padding: 28px; text-align: center;
+  background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; }
+.locked-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
+  color: var(--accent); margin-bottom: 10px; }
+.locked-badge::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+  animation: live-pulse 1.6s infinite; }
+.locked-msg { font-size: 12px; line-height: 1.5; color: var(--text-2); }
 
 /* Pin marker — Figma comment teardrop */
 .marker { position: absolute; width: 24px; height: 24px;

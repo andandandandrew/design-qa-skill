@@ -1,66 +1,33 @@
-#!/usr/bin/env node
 /**
- * Session daemon. Owns the Playwright persistent context, the overlay,
- * and the canonical session.json. Exits on `end` or SIGTERM.
+ * Browser capture — the optional Playwright "hat" of the session server.
  *
- * Args: --session-dir <abs path>
+ * `attachCapture(store, opts)` launches a headed Chromium with the annotation
+ * overlay injected, wires the browser-callable bindings (px pins on the live
+ * DOM), and handles screenshotting + seal-on-navigation. It is the SAME process
+ * as the HTTP console server (the store is shared); capture is lazy-attached so
+ * review-only / manual-only sessions never boot Chromium.
+ *
+ * Returns a handle: { finalizeActiveViews, close, onClose, pageCount }.
+ * The orchestrator owns lifecycle (IPC end, process exit); capture owns the
+ * browser. Browser bindings mutate `store` with px coords; the store converts
+ * to %-at-rest at seal time. The console never edits an unsealed browser view.
  */
-import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { chromium } from 'playwright';
-import { scriptsDir, sessionSubPaths, overlayInjectPath } from './lib/paths.mjs';
-import { SessionStore } from './lib/session.mjs';
-import { server as ipcServer } from './lib/ipc.mjs';
-import { buildArtifact } from './artifact/build.mjs';
 
-function parseArgs(argv) {
-  const opts = {};
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '--session-dir') opts.sessionDir = argv[++i];
-  }
-  return opts;
-}
-
-const opts = parseArgs(process.argv.slice(2));
-if (!opts.sessionDir) {
-  console.error('daemon: --session-dir required');
-  process.exit(2);
-}
-const sessionDir = path.resolve(opts.sessionDir);
-const subs = sessionSubPaths(sessionDir);
-
-let cleanupRan = false;
-function cleanup() {
-  if (cleanupRan) return;
-  cleanupRan = true;
-  for (const f of [subs.socket, subs.pidFile]) {
-    try { fs.unlinkSync(f); } catch {}
-  }
-}
-process.on('exit', cleanup);
-for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
-  process.on(sig, () => { cleanup(); process.exit(0); });
-}
-process.on('uncaughtException', (err) => {
-  console.error('daemon uncaught:', err);
-  cleanup();
-  process.exit(1);
-});
-
-async function main() {
-  fs.writeFileSync(subs.pidFile, String(process.pid));
-
-  const store = await SessionStore.load(sessionDir);
-  console.log(`daemon: loaded session ${store.doc.id} (${store.doc.name})`);
-
+export async function attachCapture(store, {
+  sessionDir,
+  screenshotsDir,
+  browserProfile,
+  overlayInjectPath,
+  log = () => {},
+}) {
   // Per-page tracked state: the most recently observed main-frame URL.
   const pageUrls = new WeakMap();
-
-  // Debounced screenshot queue: viewId -> {timer, pending}.
-  // We screenshot the *current* page when called, since the live page is what
-  // holds the pins that should be baked in. Sealing on navigation reuses the
-  // most recent screenshot (the live page is gone by the time we hear about it).
+  // viewId -> page that last touched the view (used to schedule screenshots).
+  const viewPages = new Map();
+  // Debounced screenshot queue: viewId -> {timer, page}.
   const screenshotQueue = new Map();
 
   async function takeScreenshotFor(viewId, page, { fullPage = true } = {}) {
@@ -68,7 +35,7 @@ async function main() {
       if (!page || page.isClosed?.()) return;
       const view = store.findViewById(viewId);
       if (!view || view.sealedAt) return;
-      const outPath = path.join(subs.screenshotsDir, `${viewId}.png`);
+      const outPath = path.join(screenshotsDir, `${viewId}.png`);
       // Chrome and pin-layer are both hidden via opacity inside our closed
       // shadow root. Page CSS can't override it; textarea focus is preserved.
       await page.evaluate(() => window.__designQA?.setChromeVisible?.(false)).catch(() => {});
@@ -77,9 +44,9 @@ async function main() {
       const rel = path.relative(sessionDir, outPath);
       view.screenshot = rel;
       await store.persist();
-      console.log(`daemon: screenshot ${rel} (fullPage=${fullPage})`);
+      log(`screenshot ${rel} (fullPage=${fullPage})`);
     } catch (err) {
-      console.warn('daemon: screenshot failed:', err.message);
+      console.warn('capture: screenshot failed:', err.message);
     }
   }
 
@@ -102,21 +69,18 @@ async function main() {
   }
 
   // Launch Chromium with a per-session persistent profile so logins survive.
-  await fsp.mkdir(subs.browserProfile, { recursive: true });
-  const context = await chromium.launchPersistentContext(subs.browserProfile, {
+  await fsp.mkdir(browserProfile, { recursive: true });
+  const context = await chromium.launchPersistentContext(browserProfile, {
     headless: false,
     viewport: null, // use window size
     args: ['--no-first-run', '--no-default-browser-check'],
   });
-  console.log('daemon: chromium launched');
+  log('chromium launched');
 
   // Inject overlay into every page. addInitScript applies to future
   // navigations; we'll separately inject into already-open pages below.
   await context.addInitScript({ path: overlayInjectPath });
   const overlayScript = await fsp.readFile(overlayInjectPath, 'utf8');
-
-  // viewId -> page that last touched the view (used to schedule screenshots).
-  const viewPages = new Map();
 
   // Browser-callable API. exposeBinding gives us the source `page` for free,
   // which we need so screenshots target the right tab.
@@ -149,8 +113,7 @@ async function main() {
     if (entry?.timer) { clearTimeout(entry.timer); screenshotQueue.delete(viewId); }
     // Viewport-only here so Playwright doesn't perform the (visible) fullPage
     // scroll while the user is in the middle of placing a comment. A fullPage
-    // capture happens later, at seal time (navigation/end/startNewView), via
-    // the request-event pre-navigation hook below.
+    // capture happens later, at seal time (navigation/end/startNewView).
     await takeScreenshotFor(viewId, page, { fullPage: false });
     return { pinId: pin.id };
   });
@@ -215,7 +178,7 @@ async function main() {
   });
 
   await context.exposeBinding('__designQA_navigateTo', async ({ page }, { url }) => {
-    await page.goto(url).catch((err) => { console.warn('daemon: navigateTo failed:', err.message); });
+    await page.goto(url).catch((err) => { console.warn('capture: navigateTo failed:', err.message); });
     return { ok: true };
   });
 
@@ -260,11 +223,11 @@ async function main() {
       if (view.pins.length === 0) {
         // Drop empty unsealed views on navigation so orphans don't accumulate.
         await store.deleteView({ viewId: view.id });
-        console.log(`daemon: dropped empty view ${view.id} (${view.url})`);
+        log(`dropped empty view ${view.id} (${view.url})`);
         return;
       }
       await store.sealView(view.id, view.screenshot);
-      console.log(`daemon: sealed view ${view.id} (${view.url})`);
+      log(`sealed view ${view.id} (${view.url})`);
     });
   }
 
@@ -274,7 +237,7 @@ async function main() {
     // Already-open pages (e.g. the default tab from launchPersistentContext)
     // missed addInitScript; inject the overlay directly into them.
     try { await page.addScriptTag({ content: overlayScript }); } catch (err) {
-      console.warn('daemon: initial overlay inject failed:', err.message);
+      console.warn('capture: initial overlay inject failed:', err.message);
     }
   }
 
@@ -282,67 +245,24 @@ async function main() {
     await context.newPage();
   }
 
-  // IPC: ping/status/end.
-  let ending = false;
-  const srv = await ipcServer({
-    sessionDir,
-    handle: async (msg) => {
-      if (ending) return { ready: false, ending: true };
-      if (msg.type === 'ping') return { ready: true };
-      if (msg.type === 'status') {
-        return {
-          session: {
-            id: store.doc.id,
-            name: store.doc.name,
-            viewCount: store.doc.views.length,
-            pinCount: store.pinCount(),
-          },
-        };
+  return {
+    /**
+     * Finalize any unsealed view on the active page(s) — the `end` flow.
+     * Always takes a fresh fullPage screenshot so off-fold pins place correctly.
+     */
+    async finalizeActiveViews() {
+      for (const page of context.pages()) {
+        const url = pageUrls.get(page) || page.url();
+        const view = store.doc.views.find((v) => v.url === url && !v.sealedAt && v.pins.length > 0);
+        if (!view) continue;
+        await flushScreenshot(view.id);
+        await takeScreenshotFor(view.id, page, { fullPage: true });
+        await store.sealView(view.id, view.screenshot);
       }
-      if (msg.type === 'end') {
-        ending = true;
-        // Finalize any unsealed view on the active page(s). Always take a
-        // fresh fullPage screenshot here so off-fold pins place correctly,
-        // even if only a viewport-only screenshot was captured during the session.
-        for (const page of context.pages()) {
-          const url = pageUrls.get(page) || page.url();
-          const view = store.doc.views.find((v) => v.url === url && !v.sealedAt && v.pins.length > 0);
-          if (!view) continue;
-          await flushScreenshot(view.id);
-          await takeScreenshotFor(view.id, page, { fullPage: true });
-          await store.sealView(view.id, view.screenshot);
-        }
-        await store.markEnded();
-        await buildArtifact({ sessionDir, session: store.doc, outPath: subs.artifact });
-        // Schedule shutdown after we've replied.
-        setTimeout(async () => {
-          try { await context.close(); } catch {}
-          try { srv.close(); } catch {}
-          cleanup();
-          process.exit(0);
-        }, 100);
-        return {
-          artifact: subs.artifact,
-          viewCount: store.doc.views.length,
-          pinCount: store.pinCount(),
-        };
-      }
-      return { error: `unknown type ${msg.type}` };
     },
-  });
-  console.log(`daemon: listening on ${subs.socket}`);
-
-  // If the user closes the entire browser, exit cleanly.
-  context.on('close', () => {
-    console.log('daemon: browser context closed, exiting');
-    try { srv.close(); } catch {}
-    cleanup();
-    process.exit(0);
-  });
+    /** Register a callback for when the user closes the whole browser. */
+    onClose(cb) { context.on('close', cb); },
+    pageCount() { return context.pages().length; },
+    async close() { try { await context.close(); } catch {} },
+  };
 }
-
-main().catch((err) => {
-  console.error('daemon: fatal', err);
-  cleanup();
-  process.exit(1);
-});

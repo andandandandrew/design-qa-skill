@@ -29,9 +29,9 @@ Based on the subcommand, read the corresponding workflow file and follow it comp
 
 ## Architecture (one-time read)
 
-The skill drives a long-lived **session daemon** — a detached Node process that owns the headed Chromium browser via Playwright. Each `/design-qa <cmd>` invocation is a short-lived CLI that talks to the daemon over a Unix socket at `<session-dir>/daemon.sock`.
+The skill drives a long-lived **session server** — a detached Node process that is the sole writer of `session.json`. It wears two hats: it always serves the buildless review/authoring **console** over `127.0.0.1` (static assets + `/api/session` + `/api/sessions` + `/screenshots/...` + `POST /api/mutate` + `/api/events` SSE), and it lazy-attaches a headed Chromium browser via Playwright for live capture (suppressible with `--no-capture`). Each `/design-qa <cmd>` invocation is a short-lived CLI that talks to the server over a Unix socket for lifecycle (ping/status/end).
 
-- **State of record:** `<session-dir>/session.json`. The daemon owns writes. The browser-side overlay round-trips every mutation through `window.__designQA.*` functions exposed via Playwright's `page.exposeFunction`.
+- **State of record:** `<session-dir>/session.json`. The server owns all writes — browser-overlay pins (px, via `window.__designQA.*` bindings) and console edits (`%`, via `POST /api/mutate`) both funnel through one `SessionStore`. Live-screen ownership: an unsealed browser screen is browser-owned (overlay-edited, locked in the console); everything sealed + every manual screen is console-editable.
 - **Implicit capture:** views are created on first pin placement (auto-named from `document.title`); screenshots are taken on navigation-away or on `end`.
 - **No per-pin commands:** all pin authoring (place, edit, drag, delete) happens in the browser overlay. The inspector panel inside the browser handles view-level operations.
 - **Browser ↔ pin disambiguation:** the designer clicks an "Add pin" button in the overlay to enter pin-placement mode; the next click on the page becomes a pin and mode exits.
@@ -44,8 +44,9 @@ The skill drives a long-lived **session daemon** — a detached Node process tha
   scripts/
     package.json
     cli.mjs                              # invoked by skill steps
-    daemon.mjs                           # spawned detached by `start`
-    lib/{session,ipc,paths}.mjs
+    session-server.mjs                   # spawned detached by `start` (console + capture)
+    lib/{session,ipc,paths,capture,http-server,coords}.mjs
+    console/                             # buildless review/authoring console (served over localhost)
     overlay/inject.js                    # injected into every page
     artifact/build.mjs                   # builds artifact.html on `end`
 ```
@@ -55,12 +56,14 @@ The skill drives a long-lived **session daemon** — a detached Node process tha
 ```
 <cwd>/design-qa-sessions/<timestamp>-<session-name>/
   session.json          # source of truth
-  daemon.sock           # UNIX socket (removed on clean exit)
-  daemon.pid            # daemon PID (removed on clean exit)
-  daemon.log            # daemon stdout+stderr
+  daemon.pid            # server PID (removed on clean exit)
+  daemon.log            # server stdout+stderr
+  console.url           # this session's live console URL (removed on clean exit)
   browser-profile/      # Playwright persistentContext userDataDir
   screenshots/<view-id>.png
   artifact.html         # produced on `end`
 ```
 
-The daemon is the only writer of `session.json`. The browser overlay never writes to disk directly.
+The lifecycle Unix socket lives in `os.tmpdir()` (derived from the session dir hash), not the session dir, because macOS caps socket path length.
+
+The session server is the only writer of `session.json`. Neither the browser overlay nor the console writes to disk directly; both round-trip through the server.
