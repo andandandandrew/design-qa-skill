@@ -192,6 +192,15 @@ spec did not contemplate.
 **Supersedes** the v1 behavior of building the artifact automatically at `end`. Export is
 now a deliberate, versioned action triggered from the console (and/or terminal).
 
+**Directory export (decided 2026-05-27, post-demo).** Export a small **directory**, not
+just a single `artifact.html`: the HTML + `session.json` (+ `screenshots/`) + the recorded
+Playwright script (see Spike 8). Opening the directory locally unlocks the **full
+console-style interactivity** — filter, search categories, resolve/check-off — because the
+data and assets live beside the HTML. A single inlined file stays a convenience fallback.
+The in-progress artifact-parity build (shared-renderer, LocalStorage resolve) is
+forward-compatible: swapping resolve persistence to the directory's sidecar JSON later is a
+store-adapter change. See `design-qa-spikes.md` Spike 7 (revised) for detail.
+
 **Two layers of "resolve":**
 
 - **Designer-side** resolve/check-off in the console → persists to `session.json`.
@@ -253,7 +262,26 @@ disposable). Security: bind to localhost only.
 
 Unchanged in substance: sidecar JSON vs. LocalStorage + re-export for the distributed
 artifact. Now clearly *separate* from designer-side resolve (which persists to
-`session.json` via the console).
+`session.json` via the console). **Updated 2026-05-27:** directory export is the chosen
+shape (see Export section + `design-qa-spikes.md` Spike 7 decision).
+
+### Further spikes (post-demo, 2026-05-27) — backlog, not scheduled
+
+Captured after a principal-engineer demo; full write-ups in `design-qa-spikes.md`. Not to
+be built now — recorded so the build can pick them up later.
+
+- **Spike 8 — Interaction recording & replay.** Record the path the QA person took to reach
+  a state and emit it *both* as an executable Playwright script *and* a human-followable
+  step list, so an engineer can run it or follow it. Hard part: auth/preconditions in a
+  portable script. Feeds the directory export (Spike 7).
+- **Spike 9 — Post-change regression diff (research only).** Given a recorded path + the
+  resolved/open comments, re-run after code changes and diff what changed vs. what was
+  commented/resolved. Explicitly assess approaches (visual / structural / LLM-judged) before
+  committing. Depends on Spike 8.
+- **Spike 10 — Compare-to-Figma (LLM-driven).** For reviewers who sense something's off but
+  can't name it: link a Figma node URL per screen (manual), pull the frame via Figma Console
+  MCP + desktop bridge, and have an LLM compare it to the screenshot/state to suggest or
+  generate pin descriptions (human-accepted, never silent auto-pinning).
 
 ---
 
