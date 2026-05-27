@@ -184,6 +184,26 @@ export async function attachCapture(store, {
     return { ok: true, sealed: sealedId, dropped: droppedId, newViewId: created.id };
   });
 
+  // "Save feedback" — the seal half of startNewView WITHOUT opening a new
+  // view. The designer is done editing this screen in the browser; it converts
+  // to %-at-rest and becomes console-owned. The session stays live; placing
+  // another pin on this URL auto-creates a fresh screen (findViewByUrl skips
+  // sealed views). Empty unsealed views are dropped, same as on navigation.
+  await context.exposeBinding('__designQA_sealCurrentView', async ({ page }, { url }) => {
+    const current = store.doc.views.find((v) => v.url === url && !v.sealedAt);
+    if (!current) return { ok: false, reason: 'none' };
+    if (current.pins.length === 0) {
+      await store.deleteView({ viewId: current.id });
+      return { ok: false, reason: 'empty', dropped: current.id };
+    }
+    await flushScreenshot(current.id);
+    // Fresh fullPage at seal time supersedes any viewport-only placement shot,
+    // so off-fold pins land correctly in the artifact.
+    await takeScreenshotFor(current.id, page, { fullPage: true });
+    await store.sealView(current.id, current.screenshot);
+    return { ok: true, sealed: current.id };
+  });
+
   await context.exposeBinding('__designQA_navigateTo', async ({ page }, { url }) => {
     await page.goto(url).catch((err) => { console.warn('capture: navigateTo failed:', err.message); });
     return { ok: true };
@@ -238,16 +258,21 @@ export async function attachCapture(store, {
 
   return {
     /**
-     * Finalize any unsealed view on the active page(s) — the `end` flow.
-     * Always takes a fresh fullPage screenshot so off-fold pins place correctly.
+     * Seal every unsealed view that has pins — the `end` flow AND the
+     * browser-close flow. Iterates the STORE (not live pages) so it still seals
+     * cleanly when the browser is already gone (close event): in that case the
+     * page is closed, takeScreenshotFor early-returns, and we seal with the last
+     * good shot captured at pin-placement. When a page is still alive (`end`), we
+     * take a fresh fullPage first so off-fold pins place correctly.
      */
     async finalizeActiveViews() {
-      for (const page of context.pages()) {
-        const url = pageUrls.get(page) || page.url();
-        const view = store.doc.views.find((v) => v.url === url && !v.sealedAt && v.pins.length > 0);
-        if (!view) continue;
-        await flushScreenshot(view.id);
-        await takeScreenshotFor(view.id, page, { fullPage: true });
+      for (const view of store.doc.views) {
+        if (view.sealedAt || view.pins.length === 0) continue;
+        const page = viewPages.get(view.id);
+        if (page && !page.isClosed?.()) {
+          await flushScreenshot(view.id);
+          await takeScreenshotFor(view.id, page, { fullPage: true });
+        }
         await store.sealView(view.id, view.screenshot);
       }
     },

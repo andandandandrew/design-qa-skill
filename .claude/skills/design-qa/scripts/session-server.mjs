@@ -86,9 +86,15 @@ async function main() {
       overlayInjectPath,
       log,
     });
-    // If the user closes the entire capture browser, exit cleanly.
-    capture.onClose(() => {
-      log('capture browser closed, exiting');
+    // If the user closes the entire capture browser, seal any active view the
+    // same way `end` does (so an abrupt close still commits %-normalized,
+    // console-editable screens), then exit cleanly. Skip if `end` is already
+    // handling shutdown to avoid double-finalize.
+    capture.onClose(async () => {
+      if (ending) return;
+      log('capture browser closed, sealing active views + exiting');
+      try { await capture.finalizeActiveViews(); }
+      catch (e) { log(`finalize on close failed: ${e.message}`); }
       httpSrv.close();
       try { srv.close(); } catch {}
       cleanup();

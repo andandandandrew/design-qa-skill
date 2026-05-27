@@ -17,7 +17,7 @@
  *   __designQA_loadForUrl, __designQA_ensureView, __designQA_createPin,
  *   __designQA_updatePin (note OR x/y), __designQA_deletePin,
  *   __designQA_renameView, __designQA_deleteView, __designQA_startNewView,
- *   __designQA_navigateTo, __designQA_listSession
+ *   __designQA_sealCurrentView, __designQA_navigateTo, __designQA_listSession
  *
  * Daemon-callable: window.__designQA.setChromeVisible(bool)
  *
@@ -111,16 +111,46 @@
       display: flex; gap: 2px; align-items: center;
       padding: 4px; border-bottom: 1px solid var(--border);
     }
+    /* Always-visible labeled verbs (Comment / Save / New). */
+    .tool-btn {
+      all: unset; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 5px 9px; border-radius: 4px;
+      color: var(--text-2); font-size: 11px; font-weight: 500;
+      transition: background 0.08s, color 0.08s;
+    }
+    .tool-btn:hover { background: var(--bg-3); color: var(--text); }
+    .tool-btn.active { background: var(--accent); color: #ffffff; }
+    .tool-btn.active:hover { background: var(--accent-hover); }
+    .tool-btn .tb-ic { display: inline-flex; }
+    .tool-btn svg { width: 13px; height: 13px; display: block; }
     .icon-btn {
       all: unset; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: center;
       width: 28px; height: 28px; border-radius: 4px;
       color: var(--text-2); transition: background 0.08s, color 0.08s;
     }
+    /* Toggle sits at the far right of the verb bar. */
+    .panel-header .icon-btn { margin-left: auto; }
     .icon-btn:hover { background: var(--bg-3); color: var(--text); }
     .icon-btn.active { background: var(--accent); color: #ffffff; }
     .icon-btn.active:hover { background: var(--accent-hover); }
     .icon-btn svg { width: 14px; height: 14px; display: block; }
+
+    /* Inline confirm for the one-way Save (native confirm() can't be used —
+       Playwright auto-dismisses it). Shows below the verb bar in either state. */
+    .confirm-bar { padding: 9px 11px; border-bottom: 1px solid var(--border); background: var(--bg); }
+    .confirm-bar[hidden] { display: none; }
+    .confirm-msg { color: var(--text); font-size: 11px; line-height: 1.45; margin-bottom: 8px; max-width: 230px; }
+    .confirm-actions { display: flex; gap: 6px; justify-content: flex-end; }
+    .confirm-cancel, .confirm-ok {
+      all: unset; cursor: pointer; font-size: 11px; font-weight: 500;
+      padding: 4px 11px; border-radius: 4px;
+    }
+    .confirm-cancel { color: var(--text-2); }
+    .confirm-cancel:hover { background: var(--bg-3); color: var(--text); }
+    .confirm-ok { background: var(--accent); color: #ffffff; }
+    .confirm-ok:hover { background: var(--accent-hover); }
 
     .panel-body { overflow-y: auto; }
 
@@ -134,11 +164,6 @@
       font-size: 11px; font-weight: 600; color: var(--text-2);
       letter-spacing: 0.02em;
     }
-    .section-header .new-screen-btn {
-      all: unset; cursor: pointer; font-size: 11px;
-      color: var(--accent); padding: 2px 6px; border-radius: 3px;
-    }
-    .section-header .new-screen-btn:hover { background: var(--accent-dim); }
 
     .empty { padding: 8px 12px; color: var(--text-3); font-size: 11px; }
 
@@ -332,19 +357,33 @@
   const ICON_X = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
   const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
   const ICON_CHEVRON_UP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>`;
+  const ICON_CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
+  const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+
+  // addBtn label content (icon + word); swapped to a Cancel state in placement mode.
+  const ADD_LABEL = `<span class="tb-ic">${ICON_COMMENT}</span><span class="tb-label">Comment</span>`;
+  const CANCEL_LABEL = `<span class="tb-ic">${ICON_X}</span><span class="tb-label">Cancel</span>`;
 
   const panel = document.createElement('div');
   panel.className = 'panel collapsed';
   panel.innerHTML = `
     <div class="panel-header">
-      <button class="icon-btn" id="addBtn" title="Add a comment (click, then click on the page)">${ICON_COMMENT}</button>
+      <button class="tool-btn" id="addBtn" title="Click, then click on the page to drop a comment">${ADD_LABEL}</button>
+      <button class="tool-btn" id="saveViewBtn" title="Save this screen — lock it here; finish edits in the console"><span class="tb-ic">${ICON_CHECK}</span><span class="tb-label">Save</span></button>
+      <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span><span class="tb-label">New</span></button>
       <button class="icon-btn" id="toggleBtn" title="Show screens & pins">${ICON_CHEVRON_DOWN}</button>
+    </div>
+    <div class="confirm-bar" id="confirmBar" hidden>
+      <div class="confirm-msg">Lock this screen? You won't be able to add or edit it here — finish in the console.</div>
+      <div class="confirm-actions">
+        <button class="confirm-cancel" id="saveCancelBtn">Cancel</button>
+        <button class="confirm-ok" id="saveConfirmBtn">Save</button>
+      </div>
     </div>
     <div class="panel-body" id="panelBody">
       <div class="section">
         <div class="section-header">
           <span class="section-title" id="viewsHeader">Screens</span>
-          <button class="new-screen-btn" id="newViewBtn" title="Seal the current screen and start a new one on this URL">+ New screen</button>
         </div>
         <div class="view-list" id="viewList"></div>
       </div>
@@ -904,6 +943,54 @@
     toast('New screen — give it a name');
   }
 
+  // "Save": seal the current screen so it becomes console-owned. Does NOT end
+  // the session — the browser stays live; placing a pin on this URL afterward
+  // auto-creates a fresh screen. The one-way nature is made explicit via an
+  // INLINE confirm in the toolbar (native confirm() is auto-dismissed by
+  // Playwright, so it can't be used here). See console-architecture lifecycle
+  // "Save feedback / Done".
+
+  function setSaveConfirm(open) {
+    const bar = $('confirmBar');
+    const btn = $('saveViewBtn');
+    if (bar) bar.hidden = !open;
+    if (btn) btn.classList.toggle('active', open);
+    if (open) window.addEventListener('keydown', confirmEsc, { capture: true });
+    else window.removeEventListener('keydown', confirmEsc, { capture: true });
+  }
+
+  function confirmEsc(e) {
+    if (e.key === 'Escape') { e.preventDefault(); setSaveConfirm(false); }
+  }
+
+  // Gate before showing the confirm: nothing committed on this screen → toast.
+  function requestSaveCurrentScreen() {
+    const realPins = STATE.pins.filter((p) => !String(p.id).startsWith(TEMP_PREFIX));
+    if (!STATE.viewId || realPins.length === 0) {
+      toast('Add a comment before saving this screen');
+      return;
+    }
+    setSaveConfirm(true);
+  }
+
+  async function performSaveCurrentScreen() {
+    setSaveConfirm(false);
+    let result;
+    try { result = await window.__designQA_sealCurrentView({ url: location.href }); }
+    catch (e) { console.warn('design-qa: sealCurrentView failed', e); return; }
+    // Reset local state: there's no editable view for this URL anymore. The next
+    // pin's commit calls ensureView, which creates a fresh screen.
+    STATE.viewId = null;
+    STATE.pins = [];
+    STATE.activePinId = null;
+    renderPins();
+    renderPopover();
+    await refreshSession();
+    if (result.ok) toast('Feedback saved — make further changes in the console');
+    else if (result.reason === 'empty') toast('Add a comment before saving this screen');
+    else toast('Nothing to save on this screen');
+  }
+
   function focusPinFromInspector(pinId, viewId) {
     if (viewId === STATE.viewId) {
       const pin = STATE.pins.find((p) => p.id === pinId);
@@ -923,9 +1010,9 @@
     STATE.placementMode = on;
     const btn = $('addBtn');
     if (btn) {
-      btn.innerHTML = on ? ICON_X : ICON_COMMENT;
+      btn.innerHTML = on ? CANCEL_LABEL : ADD_LABEL;
       btn.classList.toggle('active', on);
-      btn.title = on ? 'Cancel comment placement' : 'Add a comment (click, then click on the page)';
+      btn.title = on ? 'Cancel comment placement' : 'Click, then click on the page to drop a comment';
     }
     if (on) {
       placementOverlay = document.createElement('div');
@@ -1023,6 +1110,7 @@
           typeof window.__designQA_renameView === 'function' &&
           typeof window.__designQA_deleteView === 'function' &&
           typeof window.__designQA_startNewView === 'function' &&
+          typeof window.__designQA_sealCurrentView === 'function' &&
           typeof window.__designQA_navigateTo === 'function' &&
           typeof window.__designQA_listSession === 'function'
         ) resolve();
@@ -1056,9 +1144,12 @@
     const btn = e.target?.closest?.('button');
     if (!btn) return;
     const id = btn.id;
-    if (id === 'addBtn') { setPlacementMode(!STATE.placementMode); return; }
+    if (id === 'addBtn') { setSaveConfirm(false); setPlacementMode(!STATE.placementMode); return; }
     if (id === 'toggleBtn') { setInspectorExpanded(!STATE.inspectorExpanded); return; }
-    if (id === 'newViewBtn') { startNewScreenHere(); return; }
+    if (id === 'saveViewBtn') { requestSaveCurrentScreen(); return; }
+    if (id === 'saveCancelBtn') { setSaveConfirm(false); return; }
+    if (id === 'saveConfirmBtn') { performSaveCurrentScreen(); return; }
+    if (id === 'newViewBtn') { setSaveConfirm(false); startNewScreenHere(); return; }
   });
 
   // ------- Boot ---------------------------------------------------------
