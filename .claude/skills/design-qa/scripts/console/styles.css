@@ -26,7 +26,10 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 @keyframes live-pulse { 0% { box-shadow: 0 0 0 0 rgba(13,153,255,0.5); } 70% { box-shadow: 0 0 0 6px rgba(13,153,255,0); } 100% { box-shadow: 0 0 0 0 rgba(13,153,255,0); } }
 
 .body { position: relative; display: grid;
-  grid-template-columns: var(--col-left, 260px) 1fr var(--col-right, 360px); min-height: 0; }
+  grid-template-columns: var(--col-left, 260px) 1fr var(--col-right, 360px);
+  /* Constrain the (otherwise auto) row to the body height so a tall screenshot
+     scrolls inside .canvas rather than stretching the pane past the viewport. */
+  grid-template-rows: minmax(0, 1fr); min-height: 0; }
 
 /* Sidebar resize handles — thin hit-area on each pane boundary, accent on hover/drag. */
 .resizer { position: absolute; top: 0; bottom: 0; width: 8px; z-index: 50; cursor: col-resize; }
@@ -65,7 +68,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .sidebar-footer .btn { width: 100%; }
 
 /* Canvas — pin-on-image editor */
-.canvas-pane { display: flex; flex-direction: column; min-width: 0; background: var(--bg); }
+.canvas-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 .canvas-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
 .canvas-toolbar .hint { font-size: 11px; color: var(--text-3); }
 .canvas { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 24px; }
@@ -90,6 +93,7 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   box-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 0 0 1.5px #fff;
   cursor: grab; user-select: none; transition: transform 0.1s, background 0.1s;
   transform: translate(0, -100%); /* anchor tail at (x,y) */ }
+.marker.no-move { cursor: pointer; }
 .marker > span { transform: translate(1px, -1px); pointer-events: none; }
 .marker:hover { background: var(--accent-hover); }
 .marker.active { background: var(--accent-hover); box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #fff, 0 0 0 4px rgba(13,153,255,0.4); }

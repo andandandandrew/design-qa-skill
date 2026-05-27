@@ -45,11 +45,13 @@ export function renderCanvas(ctx, root) {
   }
 
   // Place mode: a click on the image drops a pin (opens the composer).
-  wrapper.addEventListener('click', (e) => {
-    if (!state.placeMode || e.target.closest('.marker') || e.target.closest('.composer')) return;
-    const { xPct, yPct } = pointToPct(e, wrapper);
-    ctx.setState({ composer: { viewId: view.id, xPct, yPct }, placeMode: false });
-  });
+  if (ctx.options.canPlacePins) {
+    wrapper.addEventListener('click', (e) => {
+      if (!state.placeMode || e.target.closest('.marker') || e.target.closest('.composer')) return;
+      const { xPct, yPct } = pointToPct(e, wrapper);
+      ctx.setState({ composer: { viewId: view.id, xPct, yPct }, placeMode: false });
+    });
+  }
 
   if (state.composer && state.composer.viewId === view.id) {
     wrapper.append(buildComposer(ctx, state.composer));
@@ -72,13 +74,15 @@ function pointToPct(e, wrapper) {
 function buildMarker(ctx, wrapper, p) {
   const { store, state } = ctx;
   const resolved = p.status === 'resolved';
+  const movable = ctx.options.canPlacePins; // repositioning is a placement op
   const m = el('div', {
-    class: `marker ${p.id === state.activePinId ? 'active' : ''} ${resolved ? 'resolved' : ''}`,
+    class: `marker ${p.id === state.activePinId ? 'active' : ''} ${resolved ? 'resolved' : ''} ${movable ? '' : 'no-move'}`,
     dataset: { id: p.id },
     style: `left:${p.xPct}%;top:${p.yPct}%;`,
   }, [el('span', {}, String(p.index))]);
 
-  // Press → distinguish click (select) from drag (move).
+  // Press → distinguish click (select) from drag (move). Where moving isn't
+  // allowed (e.g. the read-only artifact), every press is a plain select.
   m.addEventListener('pointerdown', (e) => {
     e.preventDefault();
     e.stopPropagation();
@@ -87,7 +91,7 @@ function buildMarker(ctx, wrapper, p) {
     m.setPointerCapture(e.pointerId);
 
     const onMove = (ev) => {
-      if (!dragging && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > DRAG_THRESHOLD) {
+      if (movable && !dragging && Math.hypot(ev.clientX - start.x, ev.clientY - start.y) > DRAG_THRESHOLD) {
         dragging = true;
         m.classList.add('dragging');
       }

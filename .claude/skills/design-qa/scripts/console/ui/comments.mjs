@@ -25,49 +25,57 @@ export function renderComments(ctx, root) {
 }
 
 function buildCard(ctx, p) {
-  const { store, state, CATEGORIES } = ctx;
+  const { store, state, CATEGORIES, options } = ctx;
   const resolved = p.status === 'resolved';
 
   const noteEl = el('div', { class: `comment-note ${p.note ? '' : 'empty'}` },
     p.note || '(no comment)');
-  noteEl.addEventListener('click', (e) => {
-    e.stopPropagation();
-    startNoteEdit(ctx, noteEl, p);
-  });
+  if (options.canEditNotes) {
+    noteEl.addEventListener('click', (e) => { e.stopPropagation(); startNoteEdit(ctx, noteEl, p); });
+  }
 
-  const catSel = el('select', { class: 'select', onclick: (e) => e.stopPropagation(),
-    onchange: (e) => { e.stopPropagation(); store.updatePin({ pinId: p.id, category: e.target.value || null }); } },
-    [el('option', { value: '' }, '— category —'),
-     ...CATEGORIES.map((c) => {
-       const o = el('option', { value: c }, c[0].toUpperCase() + c.slice(1));
-       if (c === p.category) o.selected = true;
-       return o;
-     })]);
+  // Category: an editable select where notes are editable, a read-only chip
+  // (display-only parity) otherwise. Omitted entirely when there's no category.
+  const catControl = options.canEditNotes
+    ? el('select', { class: 'select', onclick: (e) => e.stopPropagation(),
+        onchange: (e) => { e.stopPropagation(); store.updatePin({ pinId: p.id, category: e.target.value || null }); } },
+        [el('option', { value: '' }, '— category —'),
+         ...CATEGORIES.map((c) => {
+           const o = el('option', { value: c }, c[0].toUpperCase() + c.slice(1));
+           if (c === p.category) o.selected = true;
+           return o;
+         })])
+    : (p.category ? el('span', { class: 'cat-chip' }, p.category) : null);
 
-  const resolveToggle = el('label', { class: 'resolve-toggle', onclick: (e) => e.stopPropagation() }, [
-    el('input', { type: 'checkbox', onchange: (e) =>
-      store.resolvePin({ pinId: p.id, resolved: e.target.checked, resolvedNote: p.resolvedNote }) }),
-    resolved ? 'Resolved' : 'Resolve',
+  const head = el('div', { class: 'comment-head' }, [
+    el('div', { class: 'comment-number' }, String(p.index)),
+    el('span', { class: 'comment-author' }, p.author || ''),
+    el('span', { class: 'comment-spacer' }),
+    catControl,
   ]);
-  if (resolved) resolveToggle.querySelector('input').checked = true;
 
-  const del = el('button', { class: 'icon-btn danger', title: 'Delete pin',
-    onclick: (e) => { e.stopPropagation(); store.deletePin({ pinId: p.id }); } }, '🗑');
-
-  const children = [
-    el('div', { class: 'comment-head' }, [
-      el('div', { class: 'comment-number' }, String(p.index)),
-      el('span', { class: 'comment-author' }, p.author || ''),
-      el('span', { class: 'comment-spacer' }),
-      catSel,
-    ]),
-    noteEl,
-  ];
+  const children = [head, noteEl];
 
   if (resolved && p.resolvedNote) {
     children.push(el('div', { class: 'resolved-note' }, `✓ ${p.resolvedNote}`));
   }
-  children.push(el('div', { class: 'comment-foot' }, [resolveToggle, el('span', { class: 'comment-spacer' }), del]));
+
+  // Footer: resolve toggle (+ optional completion note) and delete, each gated.
+  const footChildren = [];
+  if (options.canResolve) {
+    const resolveToggle = el('label', { class: 'resolve-toggle', onclick: (e) => e.stopPropagation() }, [
+      el('input', { type: 'checkbox', onchange: (e) => onResolveToggle(ctx, p, e.target.checked) }),
+      resolved ? 'Resolved' : 'Resolve',
+    ]);
+    if (resolved) resolveToggle.querySelector('input').checked = true;
+    footChildren.push(resolveToggle);
+  }
+  if (options.canDelete) {
+    footChildren.push(el('span', { class: 'comment-spacer' }));
+    footChildren.push(el('button', { class: 'icon-btn danger', title: 'Delete pin',
+      onclick: (e) => { e.stopPropagation(); store.deletePin({ pinId: p.id }); } }, '🗑'));
+  }
+  if (footChildren.length) children.push(el('div', { class: 'comment-foot' }, footChildren));
 
   const card = el('div', {
     class: `comment ${p.id === state.activePinId ? 'active' : ''} ${resolved ? 'resolved' : ''}`,
@@ -75,6 +83,20 @@ function buildCard(ctx, p) {
     onclick: () => ctx.setState({ activePinId: state.activePinId === p.id ? null : p.id }),
   }, children);
   return card;
+}
+
+/** Resolving may capture an optional completion note (engineer-side in the
+ *  artifact; designer-side in the console). Unchecking clears it. */
+function onResolveToggle(ctx, p, checked) {
+  let resolvedNote = p.resolvedNote || null;
+  if (checked) {
+    const entered = window.prompt('Completion note (optional):', resolvedNote || '');
+    if (entered === null) { ctx.render(); return; } // cancelled → revert the checkbox
+    resolvedNote = entered.trim() || null;
+  } else {
+    resolvedNote = null;
+  }
+  ctx.store.resolvePin({ pinId: p.id, resolved: checked, resolvedNote });
 }
 
 function startNoteEdit(ctx, noteEl, p) {
