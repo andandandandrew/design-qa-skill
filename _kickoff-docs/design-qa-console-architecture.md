@@ -67,26 +67,36 @@ revisit-URL behavior to fix, because re-access is always via the console.
 screen comes into being (manual upload also creates screens), and sealing is now tied to
 explicit Done + view-change freeze rather than only navigation/`capture` transitions.
 
-### "Save feedback" / Done — the explicit seal (design locked 2026-05-27, not yet built)
+### "Save feedback" / Done — the explicit seal (BUILT 2026-05-27)
 
-The "Done" button above gets a concrete shape, so a designer never has to navigate away
+The "Done" button above got a concrete shape, so a designer never has to navigate away
 just to seal a screen:
 
-- **A "Save feedback" button in the overlay toolbar, alongside "+ New screen."** It seals
-  the current screen (fresh full-page screenshot + `sealView` + %-at-rest normalization)
-  and pushes it to the console as an editable screen — reusing the seal half of the
-  existing `startNewView` machinery (the console live-refreshes via SSE on persist).
+- **A "Save" button in the overlay toolbar, alongside "+ New screen."** It seals the
+  current screen (fresh full-page screenshot + `sealView` + %-at-rest normalization) and
+  pushes it to the console as an editable screen — reusing the seal half of the existing
+  `startNewView` machinery (the console live-refreshes via SSE on persist). Shipped as the
+  `__designQA_sealCurrentView` binding (`capture.mjs`) — the seal half *without* opening a
+  new view.
 - **It does NOT end the session.** The browser stays live; the designer keeps working
   (navigate elsewhere, start new screens). It is per-screen, not per-session.
-- **On click, a confirmation makes the one-way nature explicit:** roughly "By saving, you
-  can no longer add or edit this screen in the browser — make further changes in the
-  console." After sealing, the screen is console-owned (the live-screen ownership rule).
-- **Closing the browser should seal too (sibling fix).** Today an abrupt browser close
-  preserves pins (they persist on every placement) but leaves the active screen *unsealed*
-  — so it shows locked/read-only in the console and gets no final seal screenshot or
-  artifact rebuild. Browser-close should finalize active views the same way `end` does, so
-  a close still commits cleanly. (Build note: confirm `findViewByUrl` does not match sealed
-  views, so the next pin after a Save starts a fresh screen rather than reattaching.)
+- **A confirmation makes the one-way nature explicit.** Worth knowing: **native
+  `window.confirm`/`alert`/`prompt` are auto-dismissed by Playwright** (no dialog handler),
+  so they're unusable inside the capture overlay. The confirm is therefore an **inline
+  confirm bar rendered in the overlay's shadow DOM** ("Lock this screen? You won't be able
+  to add or edit it here — finish in the console."), dismissable via Cancel / Esc / another
+  action. (Native dialogs *do* work in the console — it's the user's normal browser — which
+  is why manual-upload naming below can use `window.prompt`.)
+- **Closing the browser seals too (sibling fix, shipped).** An abrupt browser close used to
+  preserve pins but leave the active screen *unsealed* (locked/read-only in the console).
+  Now `capture.onClose` awaits `finalizeActiveViews()` (rewritten to seal from the *store*,
+  not live pages, so it works after the browser is gone) before exiting, so a close commits
+  cleanly. Build-check held: `findViewByUrl` skips sealed views (`session.mjs:135`), so the
+  next pin after a Save starts a fresh screen rather than reattaching.
+- **Overlay UI rework (user-driven, same change):** the resting toolbar is now an
+  always-visible labeled **verb bar** (Comment / Save / New + a chevron); the chevron now
+  only expands/collapses the Screens/Pins *lists*. Previously the Save/New actions were
+  buried inside the expanded panel.
 
 ---
 
@@ -150,6 +160,17 @@ functional `captureMode`:
 `manual` is **always available as a fallback** regardless of stack — for React Native,
 non-browsable environments, or when the browser path is unavailable (e.g., out of tokens).
 React Native defaults to `manual`; web defaults to `browser` with manual on standby.
+
+**Manual upload — BUILT (Phase 5, 2026-05-27).** The console's sidebar **+ Add screen**
+(enabled only when served by the live session server) picks an image, asks for a name via
+`window.prompt`, reads the image's intrinsic dimensions client-side, and POSTs the raw
+bytes to `POST /api/upload`. The server's sole writer (`SessionStore.addManualView`) writes
+the file into the session's `screenshots/` dir and creates a `source:'manual'` view
+(`url:null`, sealed at birth, viewport from the client dims), which is immediately
+console-editable (never browser-locked). Because the canvas's placement math is already
+`%`-of-rendered-image (Spike B `imagePxToPct`), a manual screen reuses the exact
+sealed-screen pin path (`createPin` → `createPinPct`) with **no canvas changes** — proving
+the "%-at-rest unifies both paths" decision in practice.
 
 ---
 
