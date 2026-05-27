@@ -112,7 +112,16 @@ function renderHtml(meta, views) {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     font-size: 12px; line-height: 1.45; overflow: hidden; -webkit-font-smoothing: antialiased; }
   .mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-feature-settings: 'tnum'; }
-  .app { display: grid; grid-template-columns: 260px 1fr 360px; height: 100vh; }
+  .app { position: relative; display: grid;
+    grid-template-columns: var(--col-left, 260px) 1fr var(--col-right, 360px); height: 100vh; }
+
+  /* Sidebar resize handles — thin hit-area on each pane boundary. */
+  .resizer { position: absolute; top: 0; bottom: 0; width: 8px; z-index: 50; cursor: col-resize; }
+  .resizer::after { content: ''; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px;
+    transform: translateX(-50%); background: transparent; transition: background 0.1s; }
+  .resizer:hover::after, .resizer.dragging::after { background: var(--accent); width: 2px; }
+  .resizer-left { left: calc(var(--col-left, 260px) - 4px); }
+  .resizer-right { right: calc(var(--col-right, 360px) - 4px); }
 
   .sidebar { background: var(--bg-2); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
   .sidebar-header { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
@@ -326,6 +335,45 @@ function renderHtml(meta, views) {
 
   function renderAll() { renderViewList(); renderCanvas(); renderAnnotations(); }
   renderAll();
+
+  // --- Resizable sidebars (drag the pane boundaries) ---
+  (function setupResizers() {
+    const MIN = 180, MAX = 560, KEY = '__dqa_artifact_cols';
+    const app = document.querySelector('.app');
+    const clamp = (n) => Math.max(MIN, Math.min(MAX, Number(n) || 0));
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) {}
+    if (saved.left) app.style.setProperty('--col-left', clamp(saved.left) + 'px');
+    if (saved.right) app.style.setProperty('--col-right', clamp(saved.right) + 'px');
+    const persist = () => {
+      const read = (v, fb) => parseInt(getComputedStyle(app).getPropertyValue(v), 10) || fb;
+      try { localStorage.setItem(KEY, JSON.stringify({ left: read('--col-left', 260), right: read('--col-right', 360) })); } catch (e) {}
+    };
+    ['left', 'right'].forEach((side) => {
+      const h = document.createElement('div');
+      h.className = 'resizer resizer-' + side;
+      app.appendChild(h);
+      h.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        h.setPointerCapture(e.pointerId);
+        h.classList.add('dragging');
+        const rect = app.getBoundingClientRect();
+        const onMove = (ev) => {
+          const w = clamp(side === 'left' ? ev.clientX - rect.left : rect.right - ev.clientX);
+          app.style.setProperty('--col-' + side, w + 'px');
+        };
+        const onUp = () => {
+          h.releasePointerCapture(e.pointerId);
+          h.classList.remove('dragging');
+          h.removeEventListener('pointermove', onMove);
+          h.removeEventListener('pointerup', onUp);
+          persist();
+        };
+        h.addEventListener('pointermove', onMove);
+        h.addEventListener('pointerup', onUp);
+      });
+    });
+  })();
 })();
 </script>
 </body>

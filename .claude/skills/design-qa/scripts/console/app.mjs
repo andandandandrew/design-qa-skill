@@ -1,4 +1,5 @@
 import { createStore } from './store/index.mjs';
+import { setupResizers } from './ui/resizers.mjs';
 import { renderSidebar } from './ui/sidebar.mjs';
 import { renderCanvas } from './ui/canvas.mjs';
 import { renderComments } from './ui/comments.mjs';
@@ -91,6 +92,9 @@ async function main() {
   store.subscribe(() => ctx.render());
 
   document.getElementById('sessionName').textContent = store.session.name || 'Design QA';
+
+  // Resizable sidebars (drag the pane boundaries).
+  setupResizers(document.querySelector('.body'));
 
   // Minimal session switcher — only when served live (HttpStore exposes it).
   if (typeof store.listSessions === 'function') setupSwitcher(ctx, store);

@@ -68,6 +68,14 @@ export async function attachCapture(store, {
     await takeScreenshotFor(viewId, entry.page);
   }
 
+  // Drop a pending screenshot WITHOUT taking it — used when the page is
+  // navigating away, where a capture would grab a blank/unloading frame.
+  function cancelScreenshot(viewId) {
+    const entry = screenshotQueue.get(viewId);
+    if (entry?.timer) clearTimeout(entry.timer);
+    screenshotQueue.delete(viewId);
+  }
+
   // Launch Chromium with a per-session persistent profile so logins survive.
   await fsp.mkdir(browserProfile, { recursive: true });
   const context = await chromium.launchPersistentContext(browserProfile, {
@@ -109,30 +117,29 @@ export async function attachCapture(store, {
   await context.exposeBinding('__designQA_createPin', async ({ page }, { viewId, x, y, note }) => {
     const pin = await store.createPin({ viewId, x, y, note });
     viewPages.set(viewId, page);
-    const entry = screenshotQueue.get(viewId);
-    if (entry?.timer) { clearTimeout(entry.timer); screenshotQueue.delete(viewId); }
-    // Viewport-only here so Playwright doesn't perform the (visible) fullPage
-    // scroll while the user is in the middle of placing a comment. A fullPage
-    // capture happens later, at seal time (navigation/end/startNewView).
-    await takeScreenshotFor(viewId, page, { fullPage: false });
+    const view = store.findViewById(viewId);
+    // Capture a chrome-hidden fullPage of the live (stable) page. Pins are NOT
+    // baked in (the pin-layer is hidden too), so a fullPage of the current page
+    // is all we need; off-fold pins place correctly against it. The first pin
+    // captures immediately so a baseline always exists; later pins debounce to
+    // coalesce rapid placement. We never screenshot during navigation (that
+    // was the old blank-page + visible-chrome bug).
+    if (view && !view.screenshot) await takeScreenshotFor(viewId, page, { fullPage: true });
+    else scheduleScreenshot(viewId, page);
     return { pinId: pin.id };
   });
 
   await context.exposeBinding('__designQA_updatePin', async ({ page }, { pinId, note, x, y }) => {
     const pin = await store.updatePin({ pinId, note, x, y });
-    if (typeof x === 'number' || typeof y === 'number') {
-      // Drag — viewport-only for the same reason as createPin.
-      await takeScreenshotFor(pin.viewId, page, { fullPage: false });
-    }
+    // A drag changes pin coords, not page content — but refresh (debounced) in
+    // case the page scrolled. Note edits don't touch the screenshot at all.
+    if (typeof x === 'number' || typeof y === 'number') scheduleScreenshot(pin.viewId, page);
     return { ok: true };
   });
 
   await context.exposeBinding('__designQA_deletePin', async ({ page }, { pinId }) => {
     const { viewId } = await store.deletePin({ pinId });
-    // The page is expected to have optimistically removed the pin element
-    // from the DOM before calling this binding, so the screenshot now
-    // reflects the post-delete pin set.
-    await takeScreenshotFor(viewId, page);
+    scheduleScreenshot(viewId, page);
     return { ok: true };
   });
 
@@ -191,26 +198,10 @@ export async function attachCapture(store, {
   function attachPage(page) {
     pageUrls.set(page, page.url());
 
-    // Pre-navigation fullPage screenshot. `request` fires when the new
-    // navigation starts but the old page is still alive, so we can capture
-    // the canonical fullPage screenshot then. After framenavigated, the old
-    // page is gone and only the in-session viewport-only screenshot remains.
-    page.on('request', async (request) => {
-      try {
-        if (request.frame() !== page.mainFrame()) return;
-        if (!request.isNavigationRequest()) return;
-        const targetUrl = request.url();
-        const oldUrl = pageUrls.get(page);
-        if (!oldUrl || oldUrl === targetUrl) return;
-        const view = store.doc.views.find((v) => v.url === oldUrl && !v.sealedAt && v.pins.length > 0);
-        if (!view) return;
-        await takeScreenshotFor(view.id, page, { fullPage: true });
-      } catch (err) {
-        // Page may tear down mid-capture; that's fine, we already have the
-        // viewport-only screenshot as a fallback.
-      }
-    });
-
+    // Seal-on-navigation. The screenshot was already captured (chrome hidden,
+    // page rendered) at pin-placement time, so here we just seal with the last
+    // good shot. We deliberately do NOT screenshot during navigation — the old
+    // page is unloading, which produced blank frames with visible chrome.
     page.on('framenavigated', async (frame) => {
       if (frame !== page.mainFrame()) return;
       const newUrl = frame.url();
@@ -219,7 +210,7 @@ export async function attachCapture(store, {
       if (!oldUrl || oldUrl === newUrl) return;
       const view = store.doc.views.find((v) => v.url === oldUrl && !v.sealedAt);
       if (!view) return;
-      await flushScreenshot(view.id);
+      cancelScreenshot(view.id); // don't capture the navigating page
       if (view.pins.length === 0) {
         // Drop empty unsealed views on navigation so orphans don't accumulate.
         await store.deleteView({ viewId: view.id });
