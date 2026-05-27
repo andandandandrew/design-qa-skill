@@ -67,6 +67,27 @@ revisit-URL behavior to fix, because re-access is always via the console.
 screen comes into being (manual upload also creates screens), and sealing is now tied to
 explicit Done + view-change freeze rather than only navigation/`capture` transitions.
 
+### "Save feedback" / Done — the explicit seal (design locked 2026-05-27, not yet built)
+
+The "Done" button above gets a concrete shape, so a designer never has to navigate away
+just to seal a screen:
+
+- **A "Save feedback" button in the overlay toolbar, alongside "+ New screen."** It seals
+  the current screen (fresh full-page screenshot + `sealView` + %-at-rest normalization)
+  and pushes it to the console as an editable screen — reusing the seal half of the
+  existing `startNewView` machinery (the console live-refreshes via SSE on persist).
+- **It does NOT end the session.** The browser stays live; the designer keeps working
+  (navigate elsewhere, start new screens). It is per-screen, not per-session.
+- **On click, a confirmation makes the one-way nature explicit:** roughly "By saving, you
+  can no longer add or edit this screen in the browser — make further changes in the
+  console." After sealing, the screen is console-owned (the live-screen ownership rule).
+- **Closing the browser should seal too (sibling fix).** Today an abrupt browser close
+  preserves pins (they persist on every placement) but leaves the active screen *unsealed*
+  — so it shows locked/read-only in the console and gets no final seal screenshot or
+  artifact rebuild. Browser-close should finalize active views the same way `end` does, so
+  a close still commits cleanly. (Build note: confirm `findViewByUrl` does not match sealed
+  views, so the next pin after a Save starts a fresh screen rather than reattaching.)
+
 ---
 
 ## The two surfaces
@@ -206,6 +227,20 @@ store-adapter change. See `design-qa-spikes.md` Spike 7 (revised) for detail.
 - **Designer-side** resolve/check-off in the console → persists to `session.json`.
 - **Engineer-side** resolve in the distributed artifact → persists separately (the
   unresolved Spike 7 question: sidecar JSON vs. LocalStorage + re-export). Still open.
+
+**Shared-renderer artifact parity — BUILT (2026-05-27).** The exported `artifact.html` no
+longer has its own diverging renderer: it reuses the console's render modules
+(`console/core.mjs` + `ui/*` + `lib/*`). `core.mjs`'s `createApp({store, mounts, options})`
+owns state/render/filter-sort/selection; affordances are gated by `options`
+(`canPlacePins` / `canEditNotes` / `canResolve` / `canDelete`). The console enables all of
+them; the artifact enables `{ canResolve: true }` only — engineers view + filter + sort +
+see categories + resolve (with an optional completion note), but cannot add/move/delete/
+edit-note (those stay designer-side). `build.mjs` inlines the module sources via an import
+map of `@dqa/*` → base64 `data:` URLs (so the graph loads from `file://`), embeds the
+session with screenshots as `data:` URLs, and backs it with an `ArtifactStore` whose
+`resolvePin` persists to **LocalStorage keyed by session id** (the still-open engineer-side
+layer above). That choice is forward-compatible with directory export: LocalStorage →
+sidecar JSON is a store-adapter swap.
 
 ---
 
