@@ -35,6 +35,15 @@ async function main() {
     ctx.setState({ placeMode: !ctx.state.placeMode, composer: null });
   });
 
+  // Add screen (manual upload) — console only, and only when served by the
+  // session server (the fixture MemoryStore has no upload path).
+  const addScreenBtn = document.getElementById('addScreenBtn');
+  if (addScreenBtn && typeof store.addManualScreen === 'function') {
+    addScreenBtn.disabled = false;
+    addScreenBtn.title = 'Upload a screenshot to comment on';
+    addScreenBtn.addEventListener('click', () => pickAndUploadScreen(ctx, store));
+  }
+
   // Re-render on any store mutation. With HttpStore this is also driven by SSE
   // (a pin placed in the capture browser refreshes the doc → re-render here).
   store.subscribe(() => ctx.render());
@@ -46,6 +55,48 @@ async function main() {
   if (typeof store.listSessions === 'function') setupSwitcher(ctx, store);
 
   ctx.render();
+}
+
+/**
+ * Manual-upload flow: pick an image → name it → upload → select the new screen.
+ * Naming uses window.prompt (the console runs in the user's normal browser, so
+ * native dialogs work here — unlike the Playwright overlay). Intrinsic image
+ * dimensions are read client-side (works for any browser-supported format) and
+ * sent along, so the server never has to decode the image.
+ */
+function pickAndUploadScreen(ctx, store) {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg,image/webp,image/gif';
+  input.addEventListener('change', async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    const defaultName = file.name.replace(/\.[^.]+$/, '');
+    const name = window.prompt('Name this screen:', defaultName);
+    if (name === null) return; // cancelled
+    let dims = { width: null, height: null };
+    try { dims = await imageDimensions(file); } catch { /* dims optional */ }
+    try {
+      const viewId = await store.addManualScreen({
+        name: name.trim() || defaultName, file, width: dims.width, height: dims.height,
+      });
+      ctx.setState({ activeViewId: viewId, activePinId: null, placeMode: false, composer: null });
+    } catch (err) {
+      alert(`Upload failed: ${err.message || err}`);
+    }
+  }, { once: true });
+  input.click();
+}
+
+/** Read an image file's intrinsic dimensions without uploading it. */
+function imageDimensions(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve({ width: img.naturalWidth, height: img.naturalHeight }); };
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+    img.src = url;
+  });
 }
 
 /** Console-only top-bar chrome: live badge + the Add-pin button's state. The

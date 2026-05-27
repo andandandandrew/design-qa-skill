@@ -40,6 +40,29 @@ export class HttpStore {
     return data.result;
   }
 
+  /**
+   * Manual screen upload (Phase 5): POST the raw image to /api/upload, which
+   * writes it into the session and creates a source:'manual' screen. Returns
+   * the new view id; adopts the authoritative doc and emits a change so the UI
+   * re-renders and can select the new screen.
+   */
+  async addManualScreen({ name, file, width, height }) {
+    const qs = new URLSearchParams({ name: name || 'Uploaded screenshot' });
+    if (width) qs.set('w', String(width));
+    if (height) qs.set('h', String(height));
+    const res = await fetch(`${this.base}/api/upload?${qs}`, {
+      method: 'POST',
+      headers: { 'content-type': file.type || 'application/octet-stream' },
+      body: file,
+    });
+    let data;
+    try { data = await res.json(); } catch { data = {}; }
+    if (!res.ok || !data.ok) throw new Error(data.error || `upload failed (${res.status})`);
+    this.session = data.session;
+    this._changed('addManualScreen', { viewId: data.result.viewId });
+    return data.result.viewId;
+  }
+
   createPin(args) { return this._mutate('createPin', args); }
   updatePin(args) { return this._mutate('updatePin', args); }
   movePin(args) { return this._mutate('movePin', args); }

@@ -157,6 +157,38 @@ export class SessionStore {
     return view;
   }
 
+  /**
+   * Create a screen from an uploaded image (manual capture mode, Phase 5). The
+   * bytes are written into the session's screenshots dir; the view is
+   * source:'manual' with %-born pins (no page-px) and is immediately
+   * console-editable (manual screens are never browser-locked). Sealed at birth
+   * because the image is frozen the moment it's uploaded.
+   */
+  async addManualView({ name, ext = 'png', width = null, height = null, imageBuffer }) {
+    const id = newId('view');
+    const safeExt = String(ext).toLowerCase().replace(/[^a-z0-9]/g, '') || 'png';
+    const { screenshotsDir } = sessionSubPaths(this.sessionDir);
+    await fs.mkdir(screenshotsDir, { recursive: true });
+    const abs = path.join(screenshotsDir, `${id}.${safeExt}`);
+    await fs.writeFile(abs, imageBuffer);
+    const now = new Date().toISOString();
+    const view = {
+      id,
+      source: 'manual',
+      url: null,
+      title: name || 'Uploaded screenshot',
+      name: name || 'Uploaded screenshot',
+      viewport: width && height ? { width, height } : null,
+      screenshot: path.relative(this.sessionDir, abs),
+      createdAt: now,
+      sealedAt: now,
+      pins: [],
+    };
+    this.doc.views.push(view);
+    await this.persist();
+    return view;
+  }
+
   async createPin({ viewId, x, y, note, category = null, author = null }) {
     const view = this.findViewById(viewId);
     if (!view) throw new Error(`view ${viewId} not found`);

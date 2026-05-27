@@ -13,6 +13,7 @@
  *   GET  /api/session          → the owned session document
  *   GET  /api/sessions         → read-only summary of every session in the dir
  *   POST /api/mutate           → {op,args} → allowlisted console mutation
+ *   POST /api/upload           → image body → new source:'manual' screen
  *   GET  /api/events           → SSE; emits `change` on every store.persist()
  */
 import http from 'node:http';
@@ -124,6 +125,44 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
     });
   }
 
+  // Binary body (screenshot uploads). No setEncoding → chunks are Buffers.
+  function readBodyBuffer(req, limit = 25_000_000) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      req.on('data', (c) => {
+        size += c.length;
+        if (size > limit) { reject(new Error('upload too large')); req.destroy(); return; }
+        chunks.push(c);
+      });
+      req.on('end', () => resolve(Buffer.concat(chunks)));
+      req.on('error', reject);
+    });
+  }
+
+  // Allowed upload image types → file extension.
+  const UPLOAD_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' };
+
+  async function handleUpload(req, res) {
+    const q = new URLSearchParams((req.url || '').split('?')[1] || '');
+    const name = q.get('name') || 'Uploaded screenshot';
+    const width = parseInt(q.get('w'), 10) || null;
+    const height = parseInt(q.get('h'), 10) || null;
+    const mime = (req.headers['content-type'] || '').split(';')[0].trim();
+    const ext = UPLOAD_EXT[mime];
+    if (!ext) return sendJson(res, 415, { ok: false, error: `unsupported image type: ${mime || 'none'}` });
+    let imageBuffer;
+    try { imageBuffer = await readBodyBuffer(req); }
+    catch (err) { return sendJson(res, 413, { ok: false, error: String(err?.message || err) }); }
+    if (!imageBuffer.length) return sendJson(res, 400, { ok: false, error: 'empty upload' });
+    try {
+      const view = await store.addManualView({ name, ext, width, height, imageBuffer });
+      return sendJson(res, 200, { ok: true, result: { viewId: view.id }, session: store.doc });
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: String(err?.message || err) });
+    }
+  }
+
   async function handleMutate(req, res) {
     let body;
     try { body = JSON.parse(await readBody(req)); }
@@ -162,6 +201,7 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
       const url = decodeURIComponent((req.url || '/').split('?')[0]);
 
       if (req.method === 'POST' && url === '/api/mutate') return void handleMutate(req, res);
+      if (req.method === 'POST' && url === '/api/upload') return void handleUpload(req, res);
       if (req.method === 'GET' && url === '/api/session') return void sendJson(res, 200, store.doc);
       if (req.method === 'GET' && url === '/api/sessions') return void sendJson(res, 200, await listSessions());
       if (req.method === 'GET' && url === '/api/events') return void handleEvents(req, res);
