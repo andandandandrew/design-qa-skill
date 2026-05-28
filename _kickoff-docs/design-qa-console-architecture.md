@@ -299,6 +299,54 @@ The in-progress artifact-parity build (shared-renderer, LocalStorage resolve) is
 forward-compatible: swapping resolve persistence to the directory's sidecar JSON later is a
 store-adapter change. See `design-qa-spikes.md` Spike 7 (revised) for detail.
 
+**Phase 7 BUILT (commit `abad681`, 2026-05-28).** Versioned export ships as a user-facing
+**Share** action (button relabeled from "Export" at user request — same underlying file
+names). Two pieces:
+
+1. **User-facing "Share" flow.** Clicking Share opens a two-option chooser modal:
+   - *Share as single file* → one self-contained `artifact-YYYYMMDD-vN.html`.
+   - *Share as bundle (zip)* → `artifact-YYYYMMDD-vN.zip` containing `artifact.html` +
+     `session.json` + `screenshots/` + a one-line `README.md` noting the empty
+     Playwright-script slot (Spike 8).
+
+   Cancel | Next; Next is focused so Enter confirms. On Next the console fetches
+   `POST /api/export?kind=single|bundle` (which returns BYTES with `Content-Disposition`,
+   not paths) and hands the blob to **`window.showSaveFilePicker`** on Chromium — a real
+   native OS save dialog with a kind-appropriate type filter. Safari/Firefox fall back to
+   `<a download>` (browser default folder). Picker cancellation (`AbortError`) is silent.
+   Toast on success.
+
+   **Load-bearing UX decision (do not regress):** export-style actions present an OS save
+   dialog, not raw paths. The original Phase-7 cut showed two `<sessionDir>/...` paths in
+   a modal with Copy buttons; the user rejected it as engineer-think ("I don't understand
+   how to use the copy function"). Any future Share/Export/Download surface must follow
+   the same pattern. The pivot is recorded in
+   `~/.claude/projects/.../memory/architecture_decisions.md`.
+
+2. **Silent project archive.** `exportSession({ sessionDir, session })` in
+   `artifact/build.mjs` continues to write a local copy on EVERY share action regardless
+   of the chosen kind:
+   - `<sessionDir>/artifact-YYYYMMDD-vN.html` — versioned self-contained file. `vN` scans
+     same-date `artifact-*-v*.html` siblings and takes max+1.
+   - `<sessionDir>/exports/<YYYYMMDD-HHMMSS>-vN/` — the directory bundle (artifact.html +
+     session.json + screenshots/ + README.md). `vN` matches the versioned file.
+
+   The bundle's `README.md` is intentionally minimal ("a future Playwright-script slot
+   (Spike 8) not yet written") so the shape is documented before the script lands.
+
+   For the user, this archive is invisible — only the save-dialog destination is surfaced.
+   The local copies exist for project record and to make the Spike 8 / sidecar-JSON
+   store-adapter swap a small change later.
+
+   The bundle ZIP is built on-the-fly with the OS `zip` command (`spawn('zip',
+   ['-r','-X','-q','-','.'], { cwd: bundleDir })`, stdout streamed to a buffer). No
+   project dependency added; relies on Info-ZIP being present on macOS/Linux.
+
+**Gated to the owned-live session this pass.** Lookback (`?session=<basename>`) keeps the
+Share button disabled with the tooltip "Switch to the live session to share." Sibling
+export from lookback is a TODO — would route through the same `archivedStores` cache
+pattern that cross-session mutate already uses (see writer-rule generalization).
+
 **Two layers of "resolve":**
 
 - **Designer-side** resolve/check-off in the console → persists to `session.json`.
@@ -372,10 +420,12 @@ disposable). Security: bind to localhost only.
 
 ### Spike 7 (evolved) — Engineer-side completion persistence
 
-Unchanged in substance: sidecar JSON vs. LocalStorage + re-export for the distributed
-artifact. Now clearly *separate* from designer-side resolve (which persists to
-`session.json` via the console). **Updated 2026-05-27:** directory export is the chosen
-shape (see Export section + `design-qa-spikes.md` Spike 7 decision).
+**Directory export SHIPPED (Phase 7, commit `abad681`, 2026-05-28)** as a `.zip` bundle —
+`artifact.html` + `session.json` + `screenshots/` + a README noting the empty
+Playwright-script slot (Spike 8). The sidecar-JSON resolve question is still **open**: the
+shipped artifact's `ArtifactStore.resolvePin` still writes to **LocalStorage** keyed by
+session id. Moving engineer-side resolve to the bundle's sidecar `session.json` is the
+store-adapter change the design was built to allow — not yet done.
 
 ### Further spikes (post-demo, 2026-05-27) — backlog, not scheduled
 
@@ -385,7 +435,10 @@ be built now — recorded so the build can pick them up later.
 - **Spike 8 — Interaction recording & replay.** Record the path the QA person took to reach
   a state and emit it *both* as an executable Playwright script *and* a human-followable
   step list, so an engineer can run it or follow it. Hard part: auth/preconditions in a
-  portable script. Feeds the directory export (Spike 7).
+  portable script. **Has a reserved slot in the Phase-7 bundle** (the README explicitly
+  notes "a future Playwright-script slot (Spike 8) not yet written") — when this lands,
+  the script lives alongside `artifact.html` in the zip. Still requires research + UX
+  design; see `design-qa-spikes.md` §Spike 8 for the open questions.
 - **Spike 9 — Post-change regression diff (research only).** Given a recorded path + the
   resolved/open comments, re-run after code changes and diff what changed vs. what was
   commented/resolved. Explicitly assess approaches (visual / structural / LLM-judged) before

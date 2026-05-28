@@ -123,9 +123,17 @@ These spikes are a precondition to committing to the skill spec. Findings will s
 
 **Decision (2026-05-27, post-demo).** Export a small **directory**, not just a single file. Contents: `artifact.html` + `session.json` (+ `screenshots/`) + the recorded Playwright script (Spike 8). Opening the directory locally unlocks the **full console-style interactivity** (filter, search categories, resolve/check-off), since the data and assets sit beside the HTML. This supersedes the "single self-contained file is the goal" framing — a single inlined file remains a convenience fallback for quick sharing. Engineer-side resolve persistence can then write to the sidecar JSON in the directory (still bounded by browser file-write limits from `file://`). The in-progress artifact-parity build (Phase 7, shared-renderer) uses **LocalStorage in the interim**; because the artifact reuses the console render modules over a swappable store adapter, moving resolve persistence to a sidecar `session.json` later is a store-adapter change, not a rewrite. How `artifact.html` itself is packaged may change to suit the directory model — deferred to the export build.
 
+**SHIPPED (Phase 7, commit `abad681`, 2026-05-28).** The bundle ships as a **`.zip`** (one save dialog, single artifact to share) rather than an unzipped directory — same contents (`artifact.html` + `session.json` + `screenshots/` + `README.md`). The single-file form ships in parallel as a separate Share option. Both flows present a **native OS save dialog** (`window.showSaveFilePicker` on Chromium, `<a download>` fallback elsewhere); the user picks where the file lands. A silent project archive lives at `<sessionDir>/artifact-YYYYMMDD-vN.html` + `<sessionDir>/exports/<HHMMSS>-vN/` (every Share writes both). The bundle's `README.md` notes the empty Spike-8 Playwright-script slot. **Sidecar-JSON resolve persistence (the "engineer-side completion" question) is still OPEN** — the shipped artifact's `ArtifactStore.resolvePin` keeps writing to LocalStorage; moving to the bundle's `session.json` is the planned store-adapter swap, not yet done.
+
 ---
 
-## Spike 8 — Interaction recording & replay *(post-demo, 2026-05-27)*
+## Spike 8 — Interaction recording & replay *(post-demo, 2026-05-27; UX still to design)*
+
+**Status (2026-05-28):** NOT started. The Phase-7 bundle has a reserved slot — the
+exported `README.md` literally says "a future Playwright-script slot (Spike 8) not yet
+written" — so the export shape is ready; the recording mechanism, the emission format, and
+the **UX in both the capture overlay and the console** still need to be designed before
+any code. Research-and-UX-design pass is the next ask from the user.
 
 **Question.** When capturing from the browser, can we also record the series of interactions the QA person took to reach the annotated state, and emit it both as (a) an executable Playwright script and (b) a human-followable step list? *(Decision: emit BOTH forms.)*
 
