@@ -246,6 +246,52 @@ test('capture pipeline — e2e: redaction + routing + seal-on-nav', async () => 
     const sealedView = store.doc.views.find((v) => v.id === ensured.viewId);
     assert.ok(sealedView.sealedAt, 'view should be sealed after navigation');
 
+    // --- 3b. Bug regression (2026-05-28): nav-without-pin during active
+    // recording must NOT lose the captured segment. Earlier code discarded
+    // the per-URL segmentBuffer on framenavigated when no view existed for
+    // the old URL — meaning the user could press Mark-start, do work, and
+    // navigate to find every step had vanished. Fix: materialize a sealed
+    // steps-only view so the .ts emitter still sees the segment.
+    {
+      // Re-arm recording for this case. (stopRecording above cleared it.)
+      const mark2 = await page.evaluate(() => window.__designQA_markStart());
+      assert.equal(mark2.ok, true);
+
+      // We're already on NAV_TARGET (the second fixture). Do some recordable
+      // input WITHOUT calling ensureView / createPin so no view materializes
+      // for this URL.
+      await clickCenter(page, '#q');
+      await page.keyboard.type('hello');
+      await page.waitForTimeout(120);
+
+      // Confirm no view exists yet for NAV_TARGET (the seal-on-nav from the
+      // first part sealed Login; the second page has nothing pinned).
+      const navUrl = page.url();
+      const beforeNav = store.doc.views.filter((v) => v.url === navUrl);
+      assert.equal(beforeNav.length, 0,
+        'precondition: NAV_TARGET should have no view yet');
+
+      // Navigate back to LOGIN — framenavigated on the second page fires.
+      await page.goto(`file://${FIXTURE_PATH}`);
+      await page.waitForSelector('#email');
+      await page.waitForTimeout(300);
+
+      // The segment we captured on NAV_TARGET must now live in a sealed
+      // steps-only view, not be discarded.
+      const afterNav = store.doc.views.filter((v) => v.url === navUrl);
+      assert.equal(afterNav.length, 1,
+        `expected 1 sealed steps-only view for ${navUrl} after nav, got ${afterNav.length}`);
+      const stepsOnlyView = afterNav[0];
+      assert.ok(stepsOnlyView.sealedAt, 'steps-only view should be sealed at birth');
+      assert.equal(stepsOnlyView.pins.length, 0, 'steps-only view should have no pins');
+      assert.ok(Array.isArray(stepsOnlyView.steps) && stepsOnlyView.steps.length > 0,
+        `steps-only view should preserve captured steps, got ${stepsOnlyView.steps?.length} steps`);
+      // The "hello" fill should be reachable — it's why we kept the segment.
+      const dump2 = JSON.stringify(stepsOnlyView.steps);
+      assert.ok(dump2.includes('hello'),
+        `expected captured 'hello' fill to be preserved in steps-only view, got steps: ${dump2.slice(0, 400)}`);
+    }
+
     // --- 4. Final canary sweep on disk ---
     const onDisk = await fs.readFile(path.join(sessionDir, 'session.json'), 'utf8');
     assert.equal(onDisk.split(CANARY_PASSWORD).length - 1, 0,

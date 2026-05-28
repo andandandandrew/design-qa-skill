@@ -41,6 +41,12 @@
     // across all views; `startedAtMs` is the Node-side wall clock at Mark-start
     // (popover computes elapsed from it).
     recorder: { active: false, count: 0, startedAtMs: null, redactionCount: 0 },
+    // Cross-nav restore intent for the recording popover. The boot path may
+    // request "open the popover if recording is active" before the Node→shadow
+    // state push has landed (active is still false on the fresh page). When
+    // the push arrives with active=true, the setter re-checks this flag and
+    // opens the popover then. Cleared on first successful open.
+    pendingPopoverRestore: false,
   };
 
   const TEMP_PREFIX = '__temp_';
@@ -1197,6 +1203,11 @@
 
   function openRecordingPopover() {
     if (recPopoverEl) return;
+    // Persist open state Node-side so it survives navigation. See
+    // `__designQA_setUiState` in lib/capture.mjs.
+    if (typeof window.__designQA_setUiState === 'function') {
+      window.__designQA_setUiState({ popoverOpen: true }).catch(() => {});
+    }
     recPopoverEl = document.createElement('div');
     recPopoverEl.className = 'rec-popover';
     recPopoverEl.innerHTML = `
@@ -1230,6 +1241,9 @@
     recPopoverEl.remove();
     recPopoverEl = null;
     if (recStopwatchTimer) { clearInterval(recStopwatchTimer); recStopwatchTimer = null; }
+    if (typeof window.__designQA_setUiState === 'function') {
+      window.__designQA_setUiState({ popoverOpen: false }).catch(() => {});
+    }
   }
 
   // Node → shadow push setter, called via page.evaluate from capture.mjs.
@@ -1249,6 +1263,12 @@
       refreshRecPopoverList();
       // Active flipped to false? Close the popover (nothing to show).
       if (!STATE.recorder.active) closeRecordingPopover();
+    } else if (STATE.pendingPopoverRestore && STATE.recorder.active) {
+      // Boot-time restore intent finally has the state it was waiting for.
+      // Open now and clear the flag so a later push doesn't reopen after the
+      // user manually closes.
+      STATE.pendingPopoverRestore = false;
+      openRecordingPopover();
     }
   };
 
@@ -1356,16 +1376,12 @@
       btn.innerHTML = expanded ? ICON_CHEVRON_UP : ICON_CHEVRON_DOWN;
       btn.title = expanded ? 'Hide screens & pins' : 'Show screens & pins';
     }
-    try { localStorage.setItem('__design_qa_inspector_expanded', expanded ? '1' : '0'); } catch {}
-  }
-
-  function readInspectorPref() {
-    try {
-      const v = localStorage.getItem('__design_qa_inspector_expanded');
-      if (v === '1') return true;
-      if (v === '0') return false;
-    } catch {}
-    return false;
+    // Push to Node so the state survives ANY navigation, including cross-origin
+    // (e.g. auth redirects) where localStorage would reset. Fire-and-forget;
+    // failure here is purely cosmetic — next nav re-pulls whatever Node has.
+    if (typeof window.__designQA_setUiState === 'function') {
+      window.__designQA_setUiState({ panelExpanded: expanded }).catch(() => {});
+    }
   }
 
   // ------- Bootstrap / sync --------------------------------------------
@@ -1409,7 +1425,12 @@
           typeof window.__designQA_startNewView === 'function' &&
           typeof window.__designQA_sealCurrentView === 'function' &&
           typeof window.__designQA_navigateTo === 'function' &&
-          typeof window.__designQA_listSession === 'function'
+          typeof window.__designQA_listSession === 'function' &&
+          // UI-state bindings — added with the cross-nav persistence fix.
+          // Without these the overlay reverts to collapsed-panel + closed-
+          // popover on every page load.
+          typeof window.__designQA_getUiState === 'function' &&
+          typeof window.__designQA_setUiState === 'function'
         ) resolve();
         else setTimeout(check, 50);
       };
@@ -1460,10 +1481,32 @@
 
   (async () => {
     attachHost();
-    setInspectorExpanded(readInspectorPref());
     await waitForBindings();
+    // Pull the UI state Node has been holding for us. On the first page of a
+    // session both are false (defaults in capture.mjs); on every subsequent
+    // navigation they reflect whatever the user had open / expanded before
+    // navigating, including across cross-origin nav (where localStorage
+    // wouldn't have survived). Errors are swallowed — falling back to
+    // defaults is fine if the binding ever fails.
+    let ui = { panelExpanded: false, popoverOpen: false };
+    try { ui = await window.__designQA_getUiState(); } catch {}
+    setInspectorExpanded(!!ui.panelExpanded);
     await loadExistingPins();
     await refreshSession();
+    // Defer popover restore until the panel is laid out — the popover
+    // anchors to it via positionRecPopover, which reads layout. rAF is enough.
+    // If recording is already active (state push beat us), open immediately;
+    // otherwise stash the intent and let the setRecorderState setter retry
+    // when active flips true (push is throttled 200ms — we'd otherwise race).
+    if (ui.popoverOpen) {
+      STATE.pendingPopoverRestore = true;
+      requestAnimationFrame(() => {
+        if (STATE.recorder?.active && STATE.pendingPopoverRestore) {
+          STATE.pendingPopoverRestore = false;
+          openRecordingPopover();
+        }
+      });
+    }
     const obs = new MutationObserver(() => attachHost());
     obs.observe(document.documentElement, { childList: true, subtree: false });
   })();

@@ -112,9 +112,12 @@ export async function attachCapture(store, {
   //     into the view when one materializes (via __designQA_ensureView).
   //   - View seals (nav / Save / New) with buffered steps and a non-empty pin
   //     list: buffer drains into view.steps[] BEFORE the seal.
-  //   - View seals with no pins, OR navigation away with no view ever: buffer
-  //     is discarded. Matches the existing "drop empty unsealed views on nav"
-  //     semantic — steps only persist for screens the user annotated.
+  //   - View seals with no pins / no-view + buffered steps WHILE RECORDING:
+  //     promoted to a sealed steps-only view so the segment isn't lost
+  //     (fixed 2026-05-28 — the user explicitly hit Record, the bar shifts
+  //     to "preserve every action"; the original "drop unannotated screens"
+  //     rule was correct PRE-Mark-start only).
+  //   - View seals with no pins, no recording active: dropped as before.
   const redactor = createRedactor({ extraPatterns: redactionPatterns });
   /** Per-URL segment buffer for steps captured before any view exists yet. */
   const segmentBuffer = new Map();
@@ -151,6 +154,34 @@ export async function attachCapture(store, {
     for (const step of buf) {
       await store.appendStep({ viewId: view.id, step });
     }
+  }
+
+  /** Active-recording predicate. Mark-start sets `doc.recordingStartAt`; while
+   *  it's non-null we owe the user every captured step, even on URLs they
+   *  didn't pin. Pre-Mark-start the original "drop unannotated screens" rule
+   *  still applies, since those steps would land in preconditionSteps anyway. */
+  function isRecordingActive() {
+    return store.doc.recordingStartAt != null;
+  }
+
+  /**
+   * Promote orphan buffered steps to a sealed steps-only view. Called from
+   * the nav / Save / end paths when there's no annotated view for `url` but
+   * the user pressed Mark-start and we have segment data — preserving the
+   * recording overrides the "drop empty screens" rule in that mode. The view
+   * is born sealed, browser-source, with no pins and no screenshot (we
+   * never had a stable moment to take one; the user navigated past).
+   */
+  async function materializeStepsOnlyView(url, page) {
+    const buf = segmentBuffer.get(url);
+    if (!buf || buf.length === 0) { segmentBuffer.delete(url); return null; }
+    const viewport = page?.viewportSize?.() || { width: 1280, height: 800 };
+    const title = url;
+    const created = await store.createView({ url, title, viewport });
+    await drainBufferIntoView(url, created);
+    await store.sealView(created.id, created.screenshot || null);
+    log(`recorded-only view ${created.id} (${url}) — ${buf.length} step(s)`);
+    return created;
   }
 
   async function onRecorderEvent(ev) {
@@ -264,6 +295,36 @@ export async function attachCapture(store, {
   schedulePushRecorderState();    // initial state push to any already-open pages
   // ---------- end Spike 8 setup ----------
 
+  // Hide Playwright's in-page recorder UI. `recorderMode: 'api'` suppresses
+  // the separate Inspector window but the recorder still injects an in-page
+  // "glass" (highlight + selector tooltip + action point) via custom elements
+  // under `<x-pw-*>` names. We don't want it competing with our overlay, so
+  // we run a CSS stylesheet at document_start that hides them everywhere.
+  // Pattern-matching on the tag prefix (with a class fallback) catches new
+  // x-pw-* elements without us having to keep an exact allowlist in sync.
+  await context.addInitScript(() => {
+    const HIDE_CSS = `
+      x-pw-glass, x-pw-tool-overlay, x-pw-tooltip, x-pw-highlight,
+      x-pw-action-point, x-pw-pollinger,
+      [is^="x-pw-"], [class*="x-pw-"], [data-pw-recorder] {
+        display: none !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+      }
+    `;
+    const style = document.createElement('style');
+    style.id = '__designQA_hide_pw_recorder';
+    style.textContent = HIDE_CSS;
+    // documentElement may not exist yet at the earliest injection moments —
+    // append to documentElement when ready, otherwise wait.
+    const attach = () => {
+      const root = document.documentElement || document.head || document.body;
+      if (root) root.appendChild(style);
+      else setTimeout(attach, 0);
+    };
+    attach();
+  });
+
   // Inject overlay into every page. addInitScript applies to future
   // navigations; we'll separately inject into already-open pages below.
   // Skipped in headless test mode — tests call the bindings directly via
@@ -316,6 +377,24 @@ export async function attachCapture(store, {
     log(`mark-start at ${ts}`);
     schedulePushRecorderState();
     return { ok: true, recordingStartAt: ts };
+  });
+
+  // Overlay UI state (panel expanded? recording popover open?) that the
+  // shadow overlay used to keep in `localStorage`. Two failure modes drove
+  // the move to Node-side state: (a) cross-origin navigations (auth, OAuth
+  // redirects) clear localStorage and reset the panel to collapsed; (b) the
+  // popover had no persistence at all and always reopened closed. Now we
+  // store it in this process for the session lifetime; the overlay pulls
+  // on init and pushes on every toggle.
+  const overlayUiState = { panelExpanded: false, popoverOpen: false };
+
+  await context.exposeBinding('__designQA_getUiState', () => ({ ...overlayUiState }));
+
+  await context.exposeBinding('__designQA_setUiState', (_src, patch) => {
+    if (!patch || typeof patch !== 'object') return overlayUiState;
+    if (typeof patch.panelExpanded === 'boolean') overlayUiState.panelExpanded = patch.panelExpanded;
+    if (typeof patch.popoverOpen === 'boolean') overlayUiState.popoverOpen = patch.popoverOpen;
+    return overlayUiState;
   });
 
   // Spike 8: Stop recording — turn off the recorded-path emitter without
@@ -413,6 +492,7 @@ export async function attachCapture(store, {
 
   await context.exposeBinding('__designQA_startNewView', async ({ page }, { url }) => {
     const current = store.doc.views.find((v) => v.url === url && !v.sealedAt);
+    const recording = isRecordingActive();
     let sealedId = null;
     let droppedId = null;
     if (current) {
@@ -422,8 +502,14 @@ export async function attachCapture(store, {
       // were unrouted events) is naturally discarded with the view.
       await drainBufferIntoView(url, current);
       if (current.pins.length === 0) {
-        await store.deleteView({ viewId: current.id });
-        droppedId = current.id;
+        if (recording && Array.isArray(current.steps) && current.steps.length > 0) {
+          // Active-recording preserve: seal as steps-only instead of dropping.
+          await store.sealView(current.id, current.screenshot || null);
+          sealedId = current.id;
+        } else {
+          await store.deleteView({ viewId: current.id });
+          droppedId = current.id;
+        }
       } else {
         await flushScreenshot(current.id);
         // Always take a fresh fullPage at seal time. If a viewport-only
@@ -433,8 +519,13 @@ export async function attachCapture(store, {
         await store.sealView(current.id, current.screenshot);
         sealedId = current.id;
       }
+    } else if (recording) {
+      // No view existed but we may have buffered recorder steps for this URL
+      // — promote them so the segment isn't lost on the "+ New" gesture.
+      const promoted = await materializeStepsOnlyView(url, page);
+      if (promoted) sealedId = promoted.id;
     } else {
-      // No view to drain into — discard any buffered steps for this URL.
+      // No view, no recording — drop any speculative buffer.
       segmentBuffer.delete(url);
     }
     // Eagerly create a new unsealed view so the designer has something to name
@@ -453,14 +544,24 @@ export async function attachCapture(store, {
   // sealed views). Empty unsealed views are dropped, same as on navigation.
   await context.exposeBinding('__designQA_sealCurrentView', async ({ page }, { url }) => {
     const current = store.doc.views.find((v) => v.url === url && !v.sealedAt);
+    const recording = isRecordingActive();
     if (!current) {
-      // No view to seal — buffered steps for this URL go with the discard.
+      // No view to seal. If recording is active, an orphan step buffer for
+      // this URL is still worth preserving — promote it instead of discarding.
+      if (recording) {
+        const promoted = await materializeStepsOnlyView(url, page);
+        if (promoted) return { ok: true, sealed: promoted.id, recordedOnly: true };
+      }
       segmentBuffer.delete(url);
       return { ok: false, reason: 'none' };
     }
     // Spike 8: drain buffered steps into the view BEFORE deciding drop / seal.
     await drainBufferIntoView(url, current);
     if (current.pins.length === 0) {
+      if (recording && Array.isArray(current.steps) && current.steps.length > 0) {
+        await store.sealView(current.id, current.screenshot || null);
+        return { ok: true, sealed: current.id, recordedOnly: true };
+      }
       await store.deleteView({ viewId: current.id });
       return { ok: false, reason: 'empty', dropped: current.id };
     }
@@ -490,17 +591,41 @@ export async function attachCapture(store, {
     // page rendered) at pin-placement time, so here we just seal with the last
     // good shot. We deliberately do NOT screenshot during navigation — the old
     // page is unloading, which produced blank frames with visible chrome.
+    // Spike 8: when the page navigates, the recorder's per-page bindings
+    // re-inject and a fresh overlay re-registers `__designQA_setRecorderState`
+    // in the new document — but it starts in the resting state until the next
+    // push lands. The next push only fires when the user does something the
+    // recorder sees, which is gated by a 200ms throttle. End result: the chip
+    // on the new page LIES (says "Record" resting) for the first beat after
+    // nav, looking like "recording stopped." Push proactively on every page
+    // load so the chip snaps to the truth immediately. domcontentloaded fires
+    // before the user can interact; the push is no-op if the setter isn't
+    // ready yet, and the next recorder event will re-push regardless.
+    page.on('domcontentloaded', () => { schedulePushRecorderState(); });
+
     page.on('framenavigated', async (frame) => {
       if (frame !== page.mainFrame()) return;
       const newUrl = frame.url();
       const oldUrl = pageUrls.get(page);
       pageUrls.set(page, newUrl);
       if (!oldUrl || oldUrl === newUrl) return;
+      // Bug regression (2026-05-28): `lastStep` may point at a step on the OLD
+      // URL — either a still-live view about to be sealed, or a buffer about
+      // to be drained. A stale `actionUpdated` arriving from the recorder right
+      // after nav would then mutate the WRONG step (against a sealed view).
+      // Clear it; the next `actionAdded` resets it for the new page.
+      lastStep = null;
       const view = store.doc.views.find((v) => v.url === oldUrl && !v.sealedAt);
+      const recording = isRecordingActive();
+
       if (!view) {
-        // No view materialized for oldUrl — any buffered recorder steps are
-        // for an unannotated screen; discard with the same rule as nav-drop.
-        segmentBuffer.delete(oldUrl);
+        // No view materialized for oldUrl. PRE-Mark-start: buffered events
+        // were captured speculatively — discard with the nav-drop rule.
+        // ACTIVE recording: the user pressed Record, so even unannotated
+        // screens are part of the segment they want — materialize a sealed
+        // steps-only view so the .ts emitter picks up the segment.
+        if (recording) await materializeStepsOnlyView(oldUrl, page);
+        else segmentBuffer.delete(oldUrl);
         return;
       }
       cancelScreenshot(view.id); // don't capture the navigating page
@@ -508,9 +633,18 @@ export async function attachCapture(store, {
       // annotated view always carries its complete segment.
       await drainBufferIntoView(oldUrl, view);
       if (view.pins.length === 0) {
-        // Drop empty unsealed views on navigation so orphans don't accumulate.
-        await store.deleteView({ viewId: view.id });
-        log(`dropped empty view ${view.id} (${view.url})`);
+        if (recording && Array.isArray(view.steps) && view.steps.length > 0) {
+          // No pins but we DID record steps for this view — preserve as a
+          // sealed steps-only segment. screenshot may be null (no stable
+          // pin-placement moment to capture one); the view shows in the
+          // screens list with an empty canvas + the Steps disclosure.
+          await store.sealView(view.id, view.screenshot || null);
+          log(`sealed recorded-only view ${view.id} (${view.url}) — ${view.steps.length} step(s)`);
+        } else {
+          // Drop empty unsealed views on navigation so orphans don't accumulate.
+          await store.deleteView({ viewId: view.id });
+          log(`dropped empty view ${view.id} (${view.url})`);
+        }
         return;
       }
       await store.sealView(view.id, view.screenshot);
@@ -548,11 +682,22 @@ export async function attachCapture(store, {
      * take a fresh fullPage first so off-fold pins place correctly.
      */
     async finalizeActiveViews() {
+      const recording = isRecordingActive();
       for (const view of store.doc.views) {
-        if (view.sealedAt || view.pins.length === 0) continue;
+        if (view.sealedAt) continue;
         // Spike 8: drain any pending segment buffer for this view's URL before
         // the final seal, so the bundle ships a complete steps[].
         if (view.url) await drainBufferIntoView(view.url, view);
+        if (view.pins.length === 0) {
+          // Pinless view at finalize. Active recording with captured steps →
+          // seal in place to preserve the segment. Otherwise drop as before.
+          if (recording && Array.isArray(view.steps) && view.steps.length > 0) {
+            await store.sealView(view.id, view.screenshot || null);
+          } else {
+            await store.deleteView({ viewId: view.id });
+          }
+          continue;
+        }
         const page = viewPages.get(view.id);
         if (page && !page.isClosed?.()) {
           await flushScreenshot(view.id);
@@ -560,8 +705,14 @@ export async function attachCapture(store, {
         }
         await store.sealView(view.id, view.screenshot);
       }
-      // Any leftover buffers (URLs without an annotated view) are orphans —
-      // v1 doesn't ship steps for unannotated screens. Clear to free memory.
+      // Spike 8: orphan buffers (URLs that never got a view) at finalize. If
+      // recording is active, promote each one to a sealed steps-only view so
+      // the bundle ships every recorded segment. Otherwise discard.
+      if (recording) {
+        for (const orphanUrl of [...segmentBuffer.keys()]) {
+          await materializeStepsOnlyView(orphanUrl, null);
+        }
+      }
       segmentBuffer.clear();
       // Mute the recorder's callbacks; we don't need any more events.
       recorder.stop();
