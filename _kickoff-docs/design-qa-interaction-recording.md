@@ -426,6 +426,133 @@ the recorder flush; we add `await recorder.flush(viewId)` next to
 auto-dismissed inside the Playwright context. The View-steps popover uses
 shadow-DOM UI for everything (same pattern as Save's confirm bar).
 
+### Binding mechanism (Node → shadow-DOM push) — DECIDED 2026-05-28 for 9c
+
+The overlay's existing channel is **page → Node** via `exposeBinding` (page
+calls `window.__designQA_createPin(...)`, Node handles, returns). The
+recording indicator + popover need the reverse: **Node → shadow** to tell
+the overlay how many events have been captured.
+
+#### Options considered
+
+| Option | Mechanism | Verdict |
+|---|---|---|
+| **A.** `page.evaluate` calls a setter the overlay registers on `window` | One-way push; mirrors `exposeBinding` direction-reversed; no polling | **CHOSEN** |
+| **B.** Mutable `data-*` attribute on the overlay host; MutationObserver | Writing the attribute from Node *also* requires `page.evaluate`, so it collapses to A with an extra step | Rejected |
+| **C.** `exposeFunction` + a polling loop on the shadow side | Wastes CPU on a recording that's idle 99% of the time | Rejected |
+
+#### Push API (Node → shadow, frequent)
+
+The overlay registers a single setter on `window` from inside its init
+script:
+
+```js
+// inside overlay/inject.js, after the shadow root is built
+window.__designQA_setRecorderState = (state) => {
+  STATE.recorder = state;          // { active, count, startedAtMs }
+  renderRecorderChip();             // updates the verb-bar chip in place
+  if (POPOVER_OPEN) renderPopoverHeader(); // counter + stopwatch derived
+};
+```
+
+`capture.mjs` calls it on every recorder event, **coalesced via
+`requestAnimationFrame`-style microtask batching with a hard 200ms cap** —
+so the recorder firing 10× per second during a typed-out password still
+pushes ≤ 5 updates/sec to the page. Pseudocode:
+
+```js
+let pendingPush = null;
+function schedulePush(state) {
+  if (pendingPush) { pendingPush.state = state; return; }
+  pendingPush = { state };
+  setTimeout(async () => {
+    const { state: s } = pendingPush;
+    pendingPush = null;
+    for (const page of context.pages()) {
+      try {
+        await page.evaluate((s) => {
+          if (typeof window.__designQA_setRecorderState === 'function') {
+            window.__designQA_setRecorderState(s);
+          }
+        }, s);
+      } catch { /* navigating / closed — fine, next event re-pushes */ }
+    }
+  }, 200);
+}
+```
+
+Multi-tab: pushed to **every** page (each independently renders its own
+chip — captured Chromium is single-context but multi-page in practice).
+Failure modes: a page mid-navigation throws → swallow; the next event fires
+another push that lands. A page closes → throws and never lands → fine,
+the page is gone.
+
+#### Pull API (shadow → Node, one-shot on popover open)
+
+`{active, count, startedAtMs}` is tiny. The full step list (potentially
+50+ rows of `{id, humanText}`) is wasteful to push every event when the
+popover is closed 99% of the time. So:
+
+- The popover renders header+chip from the LAST PUSHED `STATE.recorder`.
+- The **list body** is fetched via a fresh `exposeBinding` on popover open:
+
+```js
+// page → Node
+const { steps, preconditionCount } = await window.__designQA_fetchRecorderSteps();
+// renders into the scrolling list
+```
+
+`capture.mjs` implements `__designQA_fetchRecorderSteps` to return:
+
+```js
+{
+  steps: [
+    { id: 'step_…', kind: 'click', humanText: 'Click the **Edit** button' },
+    // … last N steps in chronological order
+  ],
+  preconditionCount: 12,   // for the "X steps before Mark-start" sub-line
+}
+```
+
+Cap N at the most recent 100 steps for v1 — engineers reading the full
+recording reach for the exported `.spec.ts`, not the live popover. The
+human text is computed Node-side from the same `data.action` shape the
+recorder emits (POC's `describeAction` does this; production lifts it
+into `lib/recorder-format.mjs` in 9d alongside the Preview-spec emitter).
+
+#### State model — what's pushed vs. derived locally
+
+| Field | Pushed by Node? | Why |
+|---|---|---|
+| `active` (boolean) | Yes | Driven by `doc.recordingStartAt != null`; only changes on Mark-start. |
+| `count` (number of post-Mark-start steps) | Yes | Server is authoritative — re-derives from `doc.views[*].steps[]`. |
+| `startedAtMs` (number) | Yes (once at Mark-start) | The stopwatch is derived from `Date.now() - startedAtMs`, ticked locally by a `setInterval` in the shadow at 1Hz. |
+| `redactionCount` (number) | Yes | For the popover's "X values redacted" line (also shown in 9d's Preview modal). |
+| Step list | **No** — pulled on popover open | Heavier payload; only needed when visible. |
+
+The 1Hz stopwatch interval is owned by the shadow JS and runs only while
+the chip is `active` AND the popover is open (no point ticking while
+hidden). When the popover closes, `clearInterval`. When `active` flips
+false, the interval is cleared too.
+
+#### What we are NOT doing
+
+- **No SSE channel into the overlay.** The console's SSE is for the
+  localhost console (browser tab #2), not the captured Chromium. Reusing
+  it would mean wiring an EventSource into the captured page, which is
+  more dependencies for a one-way state push.
+- **No `__designQA_*` reads from outside the popover.** Other overlay
+  surfaces (the verb bar's resting chip) get their state from the same
+  `STATE.recorder` cache the setter writes — single source of truth.
+
+#### Throwaway alternative if push semantics break
+
+If `page.evaluate` from Node mid-`framenavigated` ever causes a problem we
+can't catch defensively (unlikely; the try/catch covers it), the fallback
+is to write `STATE.recorder` to a sealed `localStorage` key and have the
+shadow JS poll it at 200ms while the popover is open. Mentioned for the
+record; not implemented.
+
 ---
 
 ## 7. UX — console
