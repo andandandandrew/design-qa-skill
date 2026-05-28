@@ -18,6 +18,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timestampSlug } from '../lib/paths.mjs';
+import { emitRecordingSpec } from '../lib/emit-spec.mjs';
+import { emitRecordingSteps } from '../lib/emit-steps.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONSOLE_DIR = path.resolve(HERE, '..', 'console');
@@ -165,9 +167,8 @@ async function nextVersion(sessionDir, date) {
 }
 
 /**
- * Higher-level export action (Phase 7). Produces a PAIR of outputs from one
- * call so the engineer-handoff shape is documented even before the Playwright
- * recording (Spike 8) lands:
+ * Higher-level export action (Phase 7, extended by Spike 8 phase 9e). Produces
+ * a PAIR of outputs from one call:
  *
  *  1. A versioned self-contained file at
  *     `<sessionDir>/artifact-YYYYMMDD-vN.html`, where `N` is the next free
@@ -176,8 +177,14 @@ async function nextVersion(sessionDir, date) {
  *  2. A directory bundle at `<sessionDir>/exports/<YYYYMMDD-HHMMSS>-vN/`
  *     containing `artifact.html` (the same self-contained build),
  *     `session.json` (a fresh copy of the in-memory doc), `screenshots/`
- *     (every file referenced from `session.json`), and a one-line README
- *     noting the still-empty Playwright-script slot.
+ *     (every file referenced from `session.json`), the Spike-8 replay pair
+ *     (`recording.spec.ts` + `recording-steps.md`, both emitted from the same
+ *     `views[].steps[]` the console shows), and a README.
+ *
+ * The on-the-fly `zip` in `http-server.mjs::handleExport` archives the bundle
+ * dir's contents wholesale, so the two new files ride along with no server
+ * change. The single-file Share path intentionally omits the recording — it's
+ * a multi-file artifact (see design doc §8).
  *
  * Returns absolute paths so callers (HTTP endpoint, console UI) can show them
  * to the user verbatim.
@@ -214,9 +221,24 @@ export async function exportSession({ sessionDir, session }) {
       console.warn(`exportSession: skipped ${view.screenshot}:`, err.message);
     }
   }
+  // Spike 8 replay pair. Both emitters are pure (session doc → text) and read
+  // only `views[].steps[]` + `preconditionSteps[]`, already redacted at capture
+  // time. A session with no recorded steps still emits both files — each with a
+  // "no recorded steps" placeholder — so the bundle shape is stable.
+  const { text: specText } = emitRecordingSpec(session);
+  await fs.writeFile(path.join(bundleDir, 'recording.spec.ts'), specText, 'utf8');
+  await fs.writeFile(path.join(bundleDir, 'recording-steps.md'), emitRecordingSteps(session), 'utf8');
+
   await fs.writeFile(
     path.join(bundleDir, 'README.md'),
-    'Design QA export. `artifact.html` opens standalone in any browser; the sibling files are here for inspection and a future Playwright-script slot (Spike 8) not yet written.\n',
+    'Design QA export.\n\n'
+      + '- `artifact.html` — opens standalone in any browser; filter, sort, and resolve comments.\n'
+      + '- `session.json` — the source data the artifact embeds, for inspection.\n'
+      + '- `screenshots/` — every screen image the session references.\n'
+      + '- `recording.spec.ts` — a runnable Playwright spec replaying the reviewer\'s path. '
+      + 'Run with `npx playwright test recording.spec.ts`. Credentials were redacted to '
+      + '`process.env.DESIGN_QA_FIELD_*` references — set those before running.\n'
+      + '- `recording-steps.md` — the same path written out as human-followable steps.\n',
     'utf8',
   );
 

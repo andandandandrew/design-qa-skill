@@ -258,9 +258,9 @@ function openExportChooser(btn) {
     ]),
     el('div', { class: 'export-options' }, [
       option('single', 'Share as single file',
-        'One self-contained HTML artifact. Opens in any browser; engineer can filter, sort, and resolve comments.'),
+        'One self-contained HTML artifact. Opens in any browser; engineer can filter, sort, and resolve comments. (No replay script.)'),
       option('bundle', 'Share as bundle (zip)',
-        'Zipped folder: artifact.html + session.json + screenshots. For checking into a repo or sharing inspectable source.'),
+        'Zipped folder: artifact.html + session.json + screenshots + replay script. For checking into a repo or sharing inspectable source.'),
     ]),
     el('div', { class: 'export-dialog-foot' }, [cancelBtn, nextBtn]),
   ]);
