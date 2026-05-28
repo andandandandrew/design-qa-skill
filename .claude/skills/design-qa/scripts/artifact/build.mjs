@@ -26,8 +26,8 @@ const CONSOLE_DIR = path.resolve(HERE, '..', 'console');
 // keeps it readable.
 const SHARED_MODULES = [
   'lib/dom.mjs', 'lib/coords.mjs', 'lib/events.mjs',
-  'ui/sidebar.mjs', 'ui/canvas.mjs', 'ui/comments.mjs', 'ui/resizers.mjs',
-  'core.mjs', 'store/artifact-store.mjs',
+  'ui/sidebar.mjs', 'ui/canvas.mjs', 'ui/comments.mjs', 'ui/resizers.mjs', 'ui/toast.mjs',
+  'core.mjs', 'store/local-resolve.mjs', 'store/artifact-store.mjs',
 ];
 
 function pngDimensions(buf) {

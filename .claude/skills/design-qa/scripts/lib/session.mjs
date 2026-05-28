@@ -4,18 +4,35 @@ import { randomBytes } from 'node:crypto';
 import { sessionSubPaths } from './paths.mjs';
 import { pagePxToPct, pngDimensions, clampPct } from './coords.mjs';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export function newId(prefix) {
   return `${prefix}_${randomBytes(6).toString('hex')}`;
 }
 
-export function emptySession({ id, name, sessionDir }) {
+/**
+ * Build an empty session document. `author/project/stack/captureMode` come
+ * from `design-qa.config.json` (read by the CLI before spawning the server);
+ * all four are optional here so test fixtures and ad-hoc loads still work.
+ */
+export function emptySession({
+  id,
+  name,
+  sessionDir,
+  author = null,
+  project = null,
+  stack = null,
+  captureMode = null,
+}) {
   return {
     version: SCHEMA_VERSION,
     id,
     name,
     sessionDir,
+    project,
+    stack,
+    captureMode,
+    author,           // { name, email } | null
     createdAt: new Date().toISOString(),
     endedAt: null,
     views: [],
@@ -53,13 +70,20 @@ async function normalizeViewPins(sessionDir, view) {
 }
 
 /**
- * In-place v1→v2 upgrade. Additive and idempotent: adds source on views and
- * author/status/resolvedNote/category on pins, and computes xPct/yPct for any
- * sealed view that lacks them. Returns true if anything changed.
+ * In-place upgrade through every schema version. Additive and idempotent:
+ *  v1→v2: adds `view.source` and pin `author/status/resolvedNote/category`,
+ *         computes `xPct/yPct` for sealed views that lack them.
+ *  v2→v3: adds top-level `author/project/stack/captureMode` (all null for
+ *         pre-config sessions; new sessions stamp these from config at start).
+ * Returns true if anything changed.
  */
 export async function migrateDoc(sessionDir, doc) {
   let changed = false;
   if (doc.version !== SCHEMA_VERSION) { doc.version = SCHEMA_VERSION; changed = true; }
+  if (doc.author === undefined) { doc.author = null; changed = true; }
+  if (doc.project === undefined) { doc.project = null; changed = true; }
+  if (doc.stack === undefined) { doc.stack = null; changed = true; }
+  if (doc.captureMode === undefined) { doc.captureMode = null; changed = true; }
   for (const view of doc.views) {
     if (view.source == null) { view.source = 'browser'; changed = true; }
     for (const p of view.pins) {
@@ -189,10 +213,14 @@ export class SessionStore {
     return view;
   }
 
-  async createPin({ viewId, x, y, note, category = null, author = null }) {
+  async createPin({ viewId, x, y, note, category = null, author }) {
     const view = this.findViewById(viewId);
     if (!view) throw new Error(`view ${viewId} not found`);
     if (view.sealedAt) throw new Error(`view ${viewId} is sealed`);
+    // Default author from the session's configured identity (Phase 6) so the
+    // browser-overlay binding — which doesn't know about config — still stamps
+    // every pin without changing its own call signature.
+    const stampedAuthor = author ?? this.doc.author?.name ?? null;
     const pin = {
       id: newId('pin'),
       viewId,
@@ -200,7 +228,7 @@ export class SessionStore {
       y,
       note: note || '',
       category,
-      author,
+      author: stampedAuthor,
       status: 'open',
       resolvedNote: null,
       createdAt: new Date().toISOString(),
@@ -282,9 +310,12 @@ export class SessionStore {
   // HTTP boundary via _assertConsoleEditable before dispatch. Console pins are
   // born with xPct/yPct and carry no page-px x/y (unlike live browser pins).
 
-  async createPinPct({ viewId, xPct, yPct, note = '', category = null, author = null }) {
+  async createPinPct({ viewId, xPct, yPct, note = '', category = null, author }) {
     const view = this.findViewById(viewId);
     if (!view) throw new Error(`view ${viewId} not found`);
+    // Same default as createPin — console mutations also fall through to the
+    // session-level identity when the caller didn't pass an explicit author.
+    const stampedAuthor = author ?? this.doc.author?.name ?? null;
     const pin = {
       id: newId('pin'),
       viewId,
@@ -292,7 +323,7 @@ export class SessionStore {
       yPct: clampPct(yPct),
       note: note || '',
       category,
-      author,
+      author: stampedAuthor,
       status: 'open',
       resolvedNote: null,
       createdAt: new Date().toISOString(),

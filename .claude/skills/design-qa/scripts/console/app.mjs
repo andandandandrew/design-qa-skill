@@ -7,9 +7,20 @@ import { setupResizers } from './ui/resizers.mjs';
  * file adds only the console's live chrome — the Add-pin button, the live
  * badge, the session switcher, SSE-driven re-render, and resizable panes. The
  * exported artifact wraps the same engine with its own (read-mostly) bootstrap.
+ *
+ * Phase 6 (reshaped 2026-05-28): two console modes coexist behind one
+ * bootstrap, but they share the SAME affordance set — an archived session is
+ * fully editable (add pins, edit notes, resolve, delete, manual upload, export).
+ * The only thing the lookback mode does differently is swap the "● live" badge
+ * for "⌛ Archived" so the user knows no capture browser is attached, and
+ * route writes to a sibling SessionStore on the server via `?id=<basename>`.
+ * Author comes from the session document (stamped at start from
+ * `design-qa.config.json`); no more hardcoded identity.
  */
 async function main() {
   const store = await createStore();
+  const lookback = !!store.isLookback;
+  const author = store.session.author?.name ?? null;
 
   const ctx = createApp({
     store,
@@ -19,24 +30,25 @@ async function main() {
       comments: document.getElementById('commentsList'),
       onRender: renderConsoleChrome,
     },
-    // The console is the full authoring surface: everything is enabled, and a
-    // capture browser may own an unsealed screen (liveCapture).
+    // Same affordances in both modes — lookback is just "live without a capture
+    // browser attached." liveCapture stays true only when a Playwright browser
+    // might own an unsealed screen, which an archived session never has.
     options: {
       canPlacePins: true, canEditNotes: true, canResolve: true, canDelete: true,
-      liveCapture: true, author: 'Andrew Frank', // Phase 6 sources author from config
+      liveCapture: !lookback, author,
     },
   });
 
   wireControls(ctx);
 
-  // Add pin (console only — the artifact has no placement affordance).
+  // Add pin — same gesture in both modes. The isLocked() guard only fires for
+  // an unsealed browser view, which only exists on the live owned session.
   document.getElementById('addPinBtn')?.addEventListener('click', () => {
-    if (ctx.isLocked(ctx.activeView())) return; // can't place on a live browser screen
+    if (ctx.isLocked(ctx.activeView())) return;
     ctx.setState({ placeMode: !ctx.state.placeMode, composer: null });
   });
 
-  // Add screen (manual upload) — console only, and only when served by the
-  // session server (the fixture MemoryStore has no upload path).
+  // Add screen (manual upload) — every store that exposes addManualScreen.
   const addScreenBtn = document.getElementById('addScreenBtn');
   if (addScreenBtn && typeof store.addManualScreen === 'function') {
     addScreenBtn.disabled = false;
@@ -51,8 +63,8 @@ async function main() {
   // Resizable sidebars (drag the pane boundaries).
   setupResizers(document.querySelector('.body'));
 
-  // Minimal session switcher — only when served live (HttpStore exposes it).
-  if (typeof store.listSessions === 'function') setupSwitcher(ctx, store);
+  // Topbar session switcher — works in both live and lookback modes.
+  if (typeof store.listSessions === 'function') setupSwitcher(ctx, store, lookback);
 
   ctx.render();
 }
@@ -99,13 +111,24 @@ function imageDimensions(file) {
   });
 }
 
-/** Console-only top-bar chrome: live badge + the Add-pin button's state. The
- *  generic counters/hint are handled in core's render. */
+/** Console-only top-bar chrome: live/archived badge + the Add-pin button's
+ *  state. The generic counters/hint are handled in core's render. */
 function renderConsoleChrome(ctx) {
+  const lookback = !!ctx.store.isLookback;
   const views = ctx.store.session.views;
-  const capturing = views.some((v) => v.source === 'browser' && !v.sealedAt);
   const liveBadge = document.getElementById('liveBadge');
-  if (liveBadge) liveBadge.classList.toggle('on', capturing);
+  if (liveBadge) {
+    if (lookback) {
+      liveBadge.classList.remove('on');
+      liveBadge.classList.add('archived');
+      liveBadge.title = 'Editing an archived session (no live capture)';
+      liveBadge.textContent = '⌛ Archived';
+    } else {
+      liveBadge.classList.remove('archived');
+      const capturing = views.some((v) => v.source === 'browser' && !v.sealedAt);
+      liveBadge.classList.toggle('on', capturing);
+    }
+  }
 
   const locked = ctx.isLocked(ctx.activeView());
   const addPin = document.getElementById('addPinBtn');
@@ -117,28 +140,40 @@ function renderConsoleChrome(ctx) {
 }
 
 /**
- * Populate a topbar dropdown from /api/sessions. Selecting another *live*
- * session navigates to its own server's console; ended sessions are listed but
- * not yet openable (cross-session editing is Phase 6 lookback).
+ * Populate a topbar dropdown from /api/sessions. Selecting another session
+ * navigates either to its own live server (live siblings → `consoleUrl`) or to
+ * the current server's lookback path (ended siblings → `lookbackUrl =
+ * ?session=<basename>`). The lookback view runs in-place on the current port.
  */
-async function setupSwitcher(ctx, store) {
+async function setupSwitcher(ctx, store, lookback) {
   const sel = document.createElement('select');
   sel.className = 'select';
   sel.id = 'sessionSwitcher';
   sel.title = 'Switch session';
   document.getElementById('sessionName').after(sel);
 
+  // In lookback mode, "current" from the server's POV is the OWNED session,
+  // not the one we're viewing. Highlight the one whose basename matches the
+  // URL `?session=` instead.
+  const lookbackBase = lookback
+    ? new URLSearchParams(window.location.search).get('session')
+    : null;
+
   const fill = async () => {
     let sessions = [];
     try { sessions = await store.listSessions(); } catch { return; }
     sel.replaceChildren(...sessions.map((s) => {
       const o = document.createElement('option');
-      o.value = s.consoleUrl || '';
-      o.dataset.current = String(!!s.current);
-      const dot = s.live ? '● ' : '';
+      // Live → that session's own URL. Ended → this server's lookback URL.
+      o.value = s.live ? (s.consoleUrl || '') : (s.lookbackUrl || '');
+      const here = lookback
+        ? (s.sessionDir.endsWith(`/${lookbackBase}`) || s.sessionDir.endsWith(`\\${lookbackBase}`))
+        : !!s.current;
+      o.dataset.here = String(here);
+      const dot = s.live ? '● ' : (s.endedAt ? '⌛ ' : '');
       o.textContent = `${dot}${s.name} · ${s.pinCount} pins · ${s.unresolved} open`;
-      if (s.current) o.selected = true;
-      if (!s.live && !s.current) o.disabled = true; // not openable yet
+      if (here) o.selected = true;
+      if (!o.value && !here) o.disabled = true; // no URL to navigate to
       return o;
     }));
   };
@@ -146,7 +181,7 @@ async function setupSwitcher(ctx, store) {
   sel.addEventListener('change', () => {
     const url = sel.value;
     const opt = sel.selectedOptions[0];
-    if (!opt || opt.dataset.current === 'true') return;
+    if (!opt || opt.dataset.here === 'true') return;
     if (url) window.location.href = url;
     else fill(); // not openable — restore selection
   });

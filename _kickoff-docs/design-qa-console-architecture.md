@@ -196,6 +196,62 @@ becomes its screenshot.
 
 ---
 
+## Comment-card layout & resolve UX *(BUILT 2026-05-28)*
+
+The console's right pane (and, by inheritance, the exported artifact's right pane) was
+reshaped to mirror Figma's comment-card pattern. Reference screenshots live in
+`_qa/figma-comment-ui/Screenshot 2026-05-28 at 9.13.57 AM.png` (card) and
+`9.14.15 AM.png` (toast).
+
+**Card layout** (`scripts/console/ui/comments.mjs`):
+
+- **Top-left:** deterministic-color circle with the author's initial (`A`, `J`, `?` for
+  null author). Color derives from a djb2-ish hash of the name so a given author looks
+  the same across sessions.
+- **Top-right:** small category dropdown (the `⋯`-overflow slot Figma uses for an
+  ellipsis menu — repurposed here as the most useful overflow) followed by a circular
+  **Mark as resolved** check button. The category control fades in on hover (or stays
+  visible when a category is set) so unset cards read clean.
+- **Breadcrumb line:** `#<index> · <screen name>`.
+- **Byline line:** `<author> · <relative time>` (`5m ago` / `2h ago` / `3d ago` /
+  `May 3` falling back to a localized short date).
+- **Note body:** click to edit (in-place textarea, commit on blur or Cmd/Ctrl+Enter,
+  Esc cancels — unchanged from before).
+
+**Resolve UX** (`scripts/console/ui/toast.mjs`):
+
+- Clicking the check button flips the pin to `status: 'resolved'` and shows a
+  **bottom-centered toast** "Comment resolved" with an **Undo** button and a close
+  `×`. Auto-dismisses in 6s; paused while hovered.
+- **No completion-note prompt** (originally there as a `window.prompt`; removed per
+  user feedback because the friction outweighed the value). The `pin.resolvedNote`
+  field stays in the schema as a back-compat tombstone but is never set anymore.
+- Clicking the filled check on a resolved comment silently unresolves (no toast —
+  the user's intent is unambiguous when they click an already-on affordance).
+
+**Cross-session editing — lookback is fully writable.** The original Phase-6 design
+had `?session=<basename>` open archived sessions read-only with a LocalStorage resolve
+layer; user feedback (2026-05-28) reshaped this so an archived session opened from the
+switcher exposes the **same** affordances as the live session (add pin, edit note,
+move, delete, resolve, manual upload). The capture-overlay-locks-the-active-view rule
+only applies to the live owned session's currently-capturing screen — archived
+sessions have no unsealed views, so all are console-editable. Server-side, the same
+`/api/mutate` and `/api/upload` endpoints accept `?id=<basename>` and route to a
+lazily-loaded `SessionStore` cached per basename. **The writer rule was generalized**:
+"one writer per session AT A TIME" replaces the original "one writer per session." An
+ended session has no other writer, so the current live server safely authors edits
+into it. Two concurrent editors of the same archived session would last-write-wins —
+called out as a v1 limitation; the realistic scenario (two live session-servers in the
+same dir both editing the same third archived session) is rare. See
+[[architecture-decisions]].
+
+The only visual cue distinguishing live from lookback in the topbar is the badge: a
+pulsing `● Live` while a capture browser owns an unsealed screen vs. a static
+`⌛ Archived` when the open session is sealed. Everything else — switcher, panes,
+gestures — is identical.
+
+---
+
 ## Configuration & initialization
 
 The expected usage: **one working directory per client/project**, kept local and
@@ -338,6 +394,65 @@ be built now — recorded so the build can pick them up later.
   can't name it: link a Figma node URL per screen (manual), pull the frame via Figma Console
   MCP + desktop bridge, and have an LLM compare it to the screenshot/state to suggest or
   generate pin descriptions (human-accepted, never silent auto-pinning).
+
+---
+
+## Phase 8 — UI consistency & Figma-parity *(deferred, 2026-05-28)*
+
+Captured after the comment-card and toast/Undo redesign (which were folded into Phase 6
+as in-flight feedback). Phase 8 is the **dedicated UI consistency phase** that runs
+**after the functional phases finish** (Phase 7 export remainder, any further functional
+work), so aesthetic changes don't muddy diffs that should read as functional. Reference
+screenshots live in `_qa/figma-comment-ui/`. Nothing in this phase is built yet.
+
+**Goals**
+
+1. **Sidebar parity with Figma.** The right comments pane was reshaped to match Figma's
+   comment-card layout (avatar / breadcrumb / byline / note + circular resolve button +
+   bottom toast w/ Undo); the rest of the chrome still feels generic. Phase 8 brings the
+   left (Screens) sidebar and the right (Comments) sidebar into the same family — see
+   `_qa/figma-comment-ui/Screenshot 2026-05-28 at 9.21.01 AM.png` (left open),
+   `Screenshot 2026-05-28 at 9.21.06 AM.png` (left collapsed pill), and `9.21.17 AM.png`
+   (right pane).
+   - **Collapsible panes** (both sides). When collapsed, the left side becomes a small
+     pill anchored top-left with the project name and an expand chevron, giving the canvas
+     full width. The right side likewise collapses to a thin gutter.
+   - **Section-headed left sidebar.** Project name + dropdown at the top with a small
+     collapse-toggle button on the same row; "Pages" / "Layers" section headers; flat
+     hierarchical list of screens with visual grouping (no hard borders between adjacent
+     screens — only between section groups). The Phase-2 sidebar today renders one bordered
+     card per screen, which reads heavier than Figma's flat list.
+   - **Search + filter + overflow in the right sidebar.** Add a comment-search box, a
+     filter glyph button, and an overflow `⋯` menu (sort / status filter live here) at the
+     top of the comments pane. The current filter selects move into that menu.
+   - **Flatter comment list.** Drop the per-card border + background; let the avatar +
+     metadata + note stack stand on its own; rely on hover for subtle highlight and the
+     active state for the selected pin.
+
+2. **Capture overlay (browser inspector) ↔ console visual parity.** The in-page overlay
+   (`overlay/inject.js`) and the console currently have their own visual languages built
+   from the same tokens but applied differently. Phase 8 unifies them so a designer
+   switching between the live capture browser and the console doesn't feel two products.
+   - Share a token file across both surfaces (the overlay can't `<link>` the console's CSS
+     because it lives in shadow-DOM inside the captured page, but it can copy the same
+     custom-property set into its shadow root).
+   - Align the verb bar, composer pill, marker, and inspector list to the console's
+     Figma-style language: same avatar/initial circles, same byline format, same
+     resolve-button shape.
+
+**Why now (i.e., why not before Phase 7)**
+
+Phase 7 (versioned + directory export) only needs the existing comment renderer — the
+shared modules already power the artifact, so any Phase-8 visual change to those modules
+flows into the export for free. Doing visual parity AFTER Phase 7 lets us ship the export
+artifact at the new visual baseline in one go rather than re-exporting after polish.
+
+**Out of scope for Phase 8 itself**
+
+The capture-overlay rewrite, if it's larger than restyling, can split into its own
+follow-on. Functional changes (new gestures, new authoring affordances) don't belong here —
+this phase is *pure visual + interaction-shape parity*. If something starts to require new
+data fields or new endpoints, it belongs in a different phase.
 
 ---
 

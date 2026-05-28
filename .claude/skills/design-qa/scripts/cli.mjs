@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { scriptsDir, timestampSlug, sessionSubPaths } from './lib/paths.mjs';
 import { emptySession, newId, writeSession, readSession } from './lib/session.mjs';
 import { request } from './lib/ipc.mjs';
+import { readConfig, writeConfig, configPathFor, normalizeConfig } from './lib/config.mjs';
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -59,18 +60,43 @@ async function cmdStart(opts) {
   if (!root) die('--root required');
   await ensureDir(root);
 
+  // Phase 6: config-driven session identity. Init (`check-config` +
+  // `write-config`) is the agent's responsibility in start.md; here we just
+  // read the result. A missing config is a hard error pointing the user back
+  // to the init step (sessions without an author muddy the audit trail).
+  const config = await readConfig(root);
+  if (!config) {
+    die(
+      `no design-qa.config.json at ${configPathFor(root)}\n` +
+      `run \`/design-qa start\` again — the init step is responsible for creating it.`,
+    );
+  }
+
   const sessionDirName = `${timestampSlug()}-${name}`;
   const sessionDir = path.join(root, sessionDirName);
   await ensureDir(sessionDir);
   await ensureDir(path.join(sessionDir, 'screenshots'));
 
   const subs = sessionSubPaths(sessionDir);
-  const session = emptySession({ id: newId('sess'), name, sessionDir });
+  const session = emptySession({
+    id: newId('sess'),
+    name,
+    sessionDir,
+    author: config.author,
+    project: config.project,
+    stack: config.stack,
+    captureMode: config.captureMode,
+  });
   await writeSession(sessionDir, session);
 
   const logFd = fs.openSync(subs.logFile, 'a');
   const serverPath = path.join(scriptsDir, 'session-server.mjs');
-  const child = spawn(process.execPath, [serverPath, '--session-dir', sessionDir], {
+  // `--no-capture` is a hidden flag for smoke tests / manual-only projects —
+  // forwards to session-server so it serves the console without booting
+  // Playwright/Chromium.
+  const serverArgs = [serverPath, '--session-dir', sessionDir];
+  if (opts['no-capture']) serverArgs.push('--no-capture');
+  const child = spawn(process.execPath, serverArgs, {
     detached: true,
     stdio: ['ignore', logFd, logFd],
     env: { ...process.env, NODE_NO_WARNINGS: '1' },
@@ -173,8 +199,36 @@ async function cmdStatus(opts) {
   process.stdout.write(JSON.stringify({ live }) + '\n');
 }
 
+async function cmdCheckConfig(opts) {
+  const root = opts.root;
+  if (!root) die('--root required');
+  const configPath = configPathFor(root);
+  const config = await readConfig(root);
+  process.stdout.write(JSON.stringify({ exists: !!config, configPath, config }) + '\n');
+}
+
+async function cmdWriteConfig(opts) {
+  const root = opts.root;
+  if (!root) die('--root required');
+  if (!opts.json || typeof opts.json !== 'string') die('--json required (serialized config object)');
+  let parsed;
+  try { parsed = JSON.parse(opts.json); }
+  catch (err) { die(`--json is not valid JSON: ${err.message}`); }
+  let normalized;
+  try { normalized = normalizeConfig(parsed); }
+  catch (err) { die(`invalid config: ${err.message}`); }
+  const { configPath, config } = await writeConfig(root, normalized);
+  process.stdout.write(JSON.stringify({ ok: true, configPath, config }) + '\n');
+}
+
 const opts = parseArgs(process.argv.slice(2));
-const handlers = { start: cmdStart, end: cmdEnd, status: cmdStatus };
+const handlers = {
+  start: cmdStart,
+  end: cmdEnd,
+  status: cmdStatus,
+  'check-config': cmdCheckConfig,
+  'write-config': cmdWriteConfig,
+};
 const handler = handlers[opts._cmd];
-if (!handler) die(`unknown subcommand "${opts._cmd}". expected: start | end | status`);
+if (!handler) die(`unknown subcommand "${opts._cmd}". expected: start | end | status | check-config | write-config`);
 handler(opts).catch((err) => die(err.stack || String(err)));

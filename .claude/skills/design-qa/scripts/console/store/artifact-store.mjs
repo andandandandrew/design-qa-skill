@@ -1,4 +1,5 @@
 import { createEmitter } from '../lib/events.mjs';
+import { applySavedResolves, saveResolvesFromSession } from './local-resolve.mjs';
 
 /**
  * The exported artifact's persistence seam — same interface as MemoryStore /
@@ -6,18 +7,20 @@ import { createEmitter } from '../lib/events.mjs';
  * inlined as `data:` URLs (so it works from `file://` with no server).
  *
  * The artifact is read-mostly: an engineer can view, filter, sort, and
- * RESOLVE (with an optional completion note). Resolve is the one mutation that
- * persists — to LocalStorage, keyed by session id, so it survives a reload
- * (the designer-side resolve in session.json stays separate; see the
- * architecture doc's "two layers of resolve"). All other mutations are inert:
- * the UI gates them off, and these no-ops are a belt-and-suspenders backstop.
+ * RESOLVE (with an optional completion note). Resolve persists to LocalStorage
+ * via the shared `local-resolve` helper (also used by the console's lookback
+ * view of archived sessions) so reloads see prior marks. The designer-side
+ * resolve in session.json stays separate; see the architecture doc's "two
+ * layers of resolve". All non-resolve mutations are inert: the UI gates them
+ * off, and these no-ops are a belt-and-suspenders backstop.
  */
+const RESOLVE_PREFIX = 'dqa_artifact_resolve';
+
 export class ArtifactStore {
   constructor(session) {
     this.session = session;
     this._emitter = createEmitter();
-    this._key = `dqa_artifact_resolve_${session.id || 'session'}`;
-    this._applySavedResolves();
+    applySavedResolves(this.session, RESOLVE_PREFIX);
   }
 
   subscribe(fn) { return this._emitter.subscribe(fn); }
@@ -48,37 +51,8 @@ export class ArtifactStore {
     if (!pin) throw new Error(`pin ${pinId} not found`);
     pin.status = resolved ? 'resolved' : 'open';
     pin.resolvedNote = resolved ? resolvedNote : null;
-    this._save();
+    saveResolvesFromSession(this.session, RESOLVE_PREFIX);
     this._changed('pin:resolve', { pinId });
     return pin;
-  }
-
-  /** Overlay LocalStorage resolves onto the embedded pins at load. */
-  _applySavedResolves() {
-    const saved = this._read();
-    if (!saved) return;
-    for (const view of this.session.views) {
-      for (const pin of view.pins) {
-        const entry = saved[pin.id];
-        if (!entry) continue;
-        pin.status = entry.status;
-        pin.resolvedNote = entry.resolvedNote ?? null;
-      }
-    }
-  }
-
-  /** Persist every pin's current resolve state as a {pinId: {...}} map. */
-  _save() {
-    const map = {};
-    for (const view of this.session.views) {
-      for (const pin of view.pins) {
-        map[pin.id] = { status: pin.status, resolvedNote: pin.resolvedNote ?? null };
-      }
-    }
-    try { localStorage.setItem(this._key, JSON.stringify(map)); } catch {}
-  }
-
-  _read() {
-    try { return JSON.parse(localStorage.getItem(this._key) || 'null'); } catch { return null; }
   }
 }

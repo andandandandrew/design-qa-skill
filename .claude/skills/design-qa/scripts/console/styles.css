@@ -22,6 +22,9 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .topbar .spacer { flex: 1; }
 .topbar .live { display: none; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); }
 .topbar .live.on { display: inline-flex; }
+/* Phase 6: same slot doubles as the archived-session indicator in lookback. */
+.topbar .live.archived { display: inline-flex; color: var(--text-2); }
+.topbar .live.archived .dot { display: none; }
 .topbar .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 var(--accent); animation: live-pulse 1.6s infinite; }
 @keyframes live-pulse { 0% { box-shadow: 0 0 0 0 rgba(13,153,255,0.5); } 70% { box-shadow: 0 0 0 6px rgba(13,153,255,0); } 100% { box-shadow: 0 0 0 0 rgba(13,153,255,0); } }
 
@@ -126,27 +129,73 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .comment:hover { background: var(--bg-3); border-color: var(--border-strong); }
 .comment.active { background: var(--selected-row); border-color: transparent; }
 .comment.resolved { opacity: 0.7; }
+
+/* Figma-style header: avatar on the left, category + resolve button on the
+   right. The category control fades in on hover (Figma-like overflow slot);
+   the resolve button always shows when a comment is resolved. */
 .comment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.comment-number { flex-shrink: 0; width: 18px; height: 18px; background: var(--accent); color: #fff;
-  border-radius: 100% 100% 100% 0; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-.comment.resolved .comment-number { background: var(--resolved); }
-.comment-author { font-size: 11px; color: var(--text-2); }
+.comment-avatar { flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
 .comment-spacer { flex: 1; }
+
+/* Category dropdown lives where Figma's `...` overflow sits. Reveals on
+   card hover or when already set; otherwise stays subtle. */
+.comment-category { background: transparent; color: var(--text-3); border: 1px solid transparent;
+  border-radius: 6px; font-size: 11px; padding: 2px 4px; opacity: 0;
+  transition: opacity 0.1s, border-color 0.1s, color 0.1s; text-transform: capitalize; }
+.comment:hover .comment-category,
+.comment-category.has-value,
+.comment-category:focus { opacity: 1; }
+.comment-category.has-value { color: var(--text-2); border-color: var(--border); background: var(--bg-3); }
+.comment-category:hover { color: var(--text); border-color: var(--border-strong); }
+
+/* Circular "Mark as resolved" button. Outline by default, filled when on. */
+.resolve-btn { flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+  border: 1px solid var(--border-strong); background: transparent; color: var(--text-2);
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
+  transition: background 0.08s, color 0.08s, border-color 0.08s; padding: 0; }
+.resolve-btn:hover { color: var(--text); border-color: var(--text-2); }
+.resolve-btn.on { background: var(--resolved); border-color: var(--resolved); color: #fff; }
+.resolve-btn.on:hover { background: var(--resolved); filter: brightness(1.08); }
+
+/* Breadcrumb and byline match Figma's two-line metadata. */
+.comment-breadcrumb { font-size: 11px; color: var(--text-2); margin-bottom: 2px; word-break: break-word; }
+.comment-byline { font-size: 11px; color: var(--text-2); margin-bottom: 8px; }
+.comment-author { color: var(--text); font-weight: 500; }
+.comment-byline-dot, .comment-time { color: var(--text-3); }
+
+/* Legacy chip retained for read-only displays (no canEditNotes). */
 .cat-chip { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--bg-3);
   border: 1px solid var(--border); color: var(--text-2); text-transform: capitalize; }
+
 .comment-note { font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
 .comment-note.empty { color: var(--text-3); font-style: italic; }
 .comment-note-edit { width: 100%; background: var(--bg-3); border: 1px solid var(--border-strong);
   border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px; padding: 8px; resize: vertical; min-height: 60px; }
 .comment-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.resolve-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); }
-.resolve-toggle input { accent-color: var(--resolved); }
-.comment.resolved .resolve-toggle { color: var(--resolved); }
-.resolved-note { font-size: 11px; color: var(--resolved); margin-top: 6px; font-style: italic; }
 .icon-btn { background: none; border: none; color: var(--text-3); padding: 2px; font-size: 13px; line-height: 1; }
 .icon-btn:hover { color: var(--text); }
 .icon-btn.danger:hover { color: var(--danger); }
 .empty-note { padding: 18px 14px; color: var(--text-3); }
+
+/* Toast: bottom-centered Figma-style pill with optional Undo and close. */
+.toast-host { position: fixed; left: 0; right: 0; bottom: 24px; display: flex;
+  justify-content: center; pointer-events: none; z-index: 1000; }
+.toast { pointer-events: auto; display: inline-flex; align-items: center; gap: 4px;
+  background: #1f1f1f; color: var(--text); border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45); border-radius: 999px;
+  padding: 6px 8px 6px 16px; font-size: 13px; min-width: 240px;
+  opacity: 0; transform: translateY(6px); transition: opacity 0.16s, transform 0.16s; }
+.toast.in { opacity: 1; transform: translateY(0); }
+.toast.out { opacity: 0; transform: translateY(6px); }
+.toast-msg { font-weight: 500; padding-right: 6px; }
+.toast-action { background: transparent; color: var(--text); border: 1px solid var(--border-strong);
+  border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.toast-action:hover { background: var(--bg-3); }
+.toast-close { background: transparent; color: var(--text-2); border: none; cursor: pointer;
+  font-size: 17px; line-height: 1; padding: 0 6px; }
+.toast-close:hover { color: var(--text); }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }

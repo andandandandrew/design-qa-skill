@@ -9,11 +9,16 @@
  * Routes:
  *   GET  /                     → console index.html (static assets from consoleDir)
  *   GET  /<asset>              → static console asset (path-traversal guarded)
- *   GET  /screenshots/<file>   → screenshot PNGs from the session dir
+ *   GET  /screenshots/<file>   → screenshot PNGs from the OWNED session dir
+ *   GET  /sessions/<dir>/screenshots/<file>
+ *                              → screenshot from any SIBLING session (Phase 6 lookback)
  *   GET  /api/session          → the owned session document
+ *   GET  /api/session?id=<dir> → a sibling session's document, read-only (Phase 6)
  *   GET  /api/sessions         → read-only summary of every session in the dir
- *   POST /api/mutate           → {op,args} → allowlisted console mutation
- *   POST /api/upload           → image body → new source:'manual' screen
+ *   POST /api/mutate[?id=<dir>]→ {op,args} → allowlisted mutation against the
+ *                                 owned session (no id) or a SIBLING (id).
+ *   POST /api/upload[?id=<dir>]→ image body → new source:'manual' screen on
+ *                                 the owned session (no id) or a SIBLING (id).
  *   GET  /api/events           → SSE; emits `change` on every store.persist()
  */
 import http from 'node:http';
@@ -21,6 +26,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { sessionSubPaths } from './paths.mjs';
+import { SessionStore } from './session.mjs';
 
 const MIME = {
   '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript',
@@ -39,7 +45,54 @@ const CONSOLE_OPS = {
 
 export async function startHttpServer(store, { sessionDir, consoleDir, log = () => {} }) {
   const subs = sessionSubPaths(sessionDir);
+  const sessionsRoot = path.dirname(sessionDir);
   const sseClients = new Set();
+  const ownedBasename = path.basename(sessionDir);
+
+  /**
+   * Cross-session writes (post-Phase-6 redesign): the current server may also
+   * write to ANY archived sibling — there's no other writer for an ended
+   * session, so allowing the live process to author its edits unifies the
+   * model (lookback isn't read-only anymore). We cache a SessionStore per
+   * basename, lazily loaded on first targeted write. The owned store stays
+   * the SSE source of truth; cross-session mutations don't broadcast (rare
+   * edge case; clients refetch via the mutate response, which adopts the
+   * authoritative doc).
+   */
+  const archivedStores = new Map(); // basename → SessionStore
+
+  /**
+   * Resolve a sibling session directory by its BASENAME, with hard guards
+   * against path traversal. Returns null on miss or any rejected input. Used
+   * by every cross-session read AND write endpoint.
+   */
+  function siblingSessionDir(basename) {
+    if (!basename || typeof basename !== 'string') return null;
+    if (basename.includes('/') || basename.includes('\\') || basename === '.' || basename === '..') return null;
+    const dir = path.join(sessionsRoot, basename);
+    if (!dir.startsWith(sessionsRoot + path.sep)) return null;
+    return dir;
+  }
+
+  /**
+   * Pick the SessionStore to mutate against, by `?id=` parameter. No id (or
+   * the owned basename) → the live owned store. An archived basename →
+   * a lazily-loaded SessionStore that's cached for subsequent writes.
+   * Returns null on a malformed/missing id so the caller can 400/404.
+   */
+  async function resolveTargetStore(id) {
+    if (!id || id === ownedBasename) return store;
+    const dir = siblingSessionDir(id);
+    if (!dir) return null;
+    if (archivedStores.has(id)) return archivedStores.get(id);
+    try {
+      const s = await SessionStore.load(dir);
+      archivedStores.set(id, s);
+      return s;
+    } catch {
+      return null;
+    }
+  }
 
   // Single subscription to the store: every persist() (browser OR console)
   // fans out to all connected console tabs so they live-refresh.
@@ -99,12 +152,17 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
         id: doc.id,
         createdAt: doc.createdAt,
         endedAt: doc.endedAt,
+        project: doc.project ?? null,
         viewCount: views.length,
         pinCount: pins.length,
         unresolved: pins.filter((p) => p.status !== 'resolved').length,
         sources,
         live,
         consoleUrl,
+        // Phase 6: ended sessions are opened read-only against the CURRENT
+        // server by basename, not by spawning a server for them. Live siblings
+        // keep navigating to their own server's URL.
+        lookbackUrl: live ? null : `/?session=${encodeURIComponent(ent.name)}`,
         current: dir === sessionDir,
       });
     }
@@ -148,6 +206,8 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
     const name = q.get('name') || 'Uploaded screenshot';
     const width = parseInt(q.get('w'), 10) || null;
     const height = parseInt(q.get('h'), 10) || null;
+    const target = await resolveTargetStore(q.get('id'));
+    if (target === null) return sendJson(res, 404, { ok: false, error: 'unknown session id' });
     const mime = (req.headers['content-type'] || '').split(';')[0].trim();
     const ext = UPLOAD_EXT[mime];
     if (!ext) return sendJson(res, 415, { ok: false, error: `unsupported image type: ${mime || 'none'}` });
@@ -156,8 +216,8 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
     catch (err) { return sendJson(res, 413, { ok: false, error: String(err?.message || err) }); }
     if (!imageBuffer.length) return sendJson(res, 400, { ok: false, error: 'empty upload' });
     try {
-      const view = await store.addManualView({ name, ext, width, height, imageBuffer });
-      return sendJson(res, 200, { ok: true, result: { viewId: view.id }, session: store.doc });
+      const view = await target.addManualView({ name, ext, width, height, imageBuffer });
+      return sendJson(res, 200, { ok: true, result: { viewId: view.id }, session: target.doc });
     } catch (err) {
       return sendJson(res, 500, { ok: false, error: String(err?.message || err) });
     }
@@ -171,14 +231,21 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
     const method = CONSOLE_OPS[op];
     if (!method) return sendJson(res, 400, { ok: false, error: `unknown op ${op}` });
 
-    // Live-screen ownership: the console may not edit an unsealed browser view.
+    // The mutation may target a sibling session (?id=); fall back to owned.
+    const q = new URLSearchParams((req.url || '').split('?')[1] || '');
+    const target = await resolveTargetStore(q.get('id'));
+    if (target === null) return sendJson(res, 404, { ok: false, error: 'unknown session id' });
+
+    // Live-screen ownership only matters for the LIVE owned session — an
+    // archived session has no unsealed browser view, so the guard is a no-op
+    // there. Applied via target so it follows the right doc.
     const view = op === 'createPin'
-      ? store.findViewById(args.viewId)
-      : store.findPin(args.pinId).view;
+      ? target.findViewById(args.viewId)
+      : target.findPin(args.pinId).view;
     try {
-      if (view) store._assertConsoleEditable(view);
-      const result = await store[method](args);
-      return sendJson(res, 200, { ok: true, result, session: store.doc });
+      if (view) target._assertConsoleEditable(view);
+      const result = await target[method](args);
+      return sendJson(res, 200, { ok: true, result, session: target.doc });
     } catch (err) {
       return sendJson(res, 409, { ok: false, error: String(err?.message || err) });
     }
@@ -198,16 +265,51 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
 
   const server = http.createServer(async (req, res) => {
     try {
-      const url = decodeURIComponent((req.url || '/').split('?')[0]);
+      const rawUrl = req.url || '/';
+      const qIdx = rawUrl.indexOf('?');
+      const url = decodeURIComponent(qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx));
+      const query = qIdx === -1 ? new URLSearchParams() : new URLSearchParams(rawUrl.slice(qIdx + 1));
 
       if (req.method === 'POST' && url === '/api/mutate') return void handleMutate(req, res);
       if (req.method === 'POST' && url === '/api/upload') return void handleUpload(req, res);
-      if (req.method === 'GET' && url === '/api/session') return void sendJson(res, 200, store.doc);
+      if (req.method === 'GET' && url === '/api/session') {
+        // Phase 6: optional `?id=<basename>` returns a sibling session's doc
+        // read-only. The current server stays the sole writer of its OWN
+        // session; serving a sibling's bytes does not make it that session's
+        // writer (mutations remain blocked by the lookback store client-side
+        // AND by the absence of any sibling-mutation endpoint server-side).
+        const id = query.get('id');
+        if (!id) return void sendJson(res, 200, store.doc);
+        const dir = siblingSessionDir(id);
+        if (!dir) return void sendJson(res, 400, { ok: false, error: 'invalid session id' });
+        const subj = sessionSubPaths(dir);
+        let doc;
+        try { doc = JSON.parse(await fsp.readFile(subj.sessionJson, 'utf8')); }
+        catch (err) {
+          const code = err.code === 'ENOENT' ? 404 : 500;
+          return void sendJson(res, code, { ok: false, error: `session ${id}: ${err.message}` });
+        }
+        return void sendJson(res, 200, doc);
+      }
       if (req.method === 'GET' && url === '/api/sessions') return void sendJson(res, 200, await listSessions());
       if (req.method === 'GET' && url === '/api/events') return void handleEvents(req, res);
 
       if (req.method === 'GET' && url.startsWith('/screenshots/')) {
         return void serveStatic(res, subs.screenshotsDir, url.slice('/screenshots/'.length).replace(/^\/+/, ''));
+      }
+      // Phase 6: sibling-session screenshots, addressed by session basename
+      // (path-traversal guarded by siblingSessionDir + serveStatic's own
+      // startsWith check inside the screenshots/ subdir).
+      if (req.method === 'GET' && url.startsWith('/sessions/')) {
+        const rest = url.slice('/sessions/'.length);
+        const slash = rest.indexOf('/');
+        const base = slash === -1 ? rest : rest.slice(0, slash);
+        const tail = slash === -1 ? '' : rest.slice(slash + 1);
+        const dir = siblingSessionDir(base);
+        if (!dir) return void (res.writeHead(404).end('not found'));
+        if (!tail.startsWith('screenshots/')) return void (res.writeHead(404).end('not found'));
+        const file = tail.slice('screenshots/'.length).replace(/^\/+/, '');
+        return void serveStatic(res, path.join(dir, 'screenshots'), file);
       }
       if (req.method === 'GET') {
         const rel = url === '/' ? 'index.html' : url.replace(/^\/+/, '');

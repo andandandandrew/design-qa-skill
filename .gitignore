@@ -4,5 +4,9 @@ node_modules/
 # Generated runtime output (browser profiles, logs, screenshots, artifacts)
 design-qa-sessions/
 
+# Per-working-directory config (project name, stack, author identity) — local
+# to the user's machine, never committed; see scripts/lib/config.mjs.
+design-qa.config.json
+
 # OS
 .DS_Store
