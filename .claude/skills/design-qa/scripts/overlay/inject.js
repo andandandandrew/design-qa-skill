@@ -123,6 +123,18 @@
        out of view when the verb bar grows (e.g. when Mark-start becomes the
        wider Recording · N chip). */
     .panel-header .icon-btn { flex-shrink: 0; }
+    /* Save is the primary commit action — pushed to the right edge of the verb
+       bar (just before the chevron) and treated as a typography-only CTA in
+       the accent color, no icon. Active state keeps the existing solid-accent
+       background used while the inline confirm bar is open. */
+    .tool-btn.save-cta {
+      margin-left: auto;
+      color: var(--accent);
+      font-weight: 600;
+    }
+    .tool-btn.save-cta:hover { background: var(--accent-dim); color: var(--accent); }
+    .tool-btn.save-cta.active,
+    .tool-btn.save-cta.active:hover { background: var(--accent); color: #ffffff; }
     /* Always-visible labeled verbs (Comment / Save / New). */
     .tool-btn {
       all: unset; cursor: pointer;
@@ -461,15 +473,18 @@
   // addBtn label content (icon + word); swapped to a Cancel state in placement mode.
   const ADD_LABEL = `<span class="tb-ic">${ICON_COMMENT}</span><span class="tb-label">Comment</span>`;
   const CANCEL_LABEL = `<span class="tb-ic">${ICON_X}</span><span class="tb-label">Cancel</span>`;
+  // Spike 8 recorder chip — resting label shows the icon + verb; active label
+  // (rendered later in renderRecorderChip) drops the icon for a pulsing red dot.
+  const REC_LABEL_RESTING = `<span class="tb-ic">${ICON_REC}</span><span class="tb-label">Record</span>`;
 
   const panel = document.createElement('div');
   panel.className = 'panel collapsed';
   panel.innerHTML = `
     <div class="panel-header">
       <button class="tool-btn" id="addBtn" title="Click, then click on the page to drop a comment">${ADD_LABEL}</button>
-      <button class="tool-btn" id="saveViewBtn" title="Save this screen — lock it here; finish edits in the console"><span class="tb-ic">${ICON_CHECK}</span><span class="tb-label">Save</span></button>
+      <button class="tool-btn recorder-chip" id="recBtn" title="Start recording the path the engineer will replay">${REC_LABEL_RESTING}</button>
       <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span><span class="tb-label">New</span></button>
-      <button class="tool-btn recorder-chip" id="recBtn" title="Mark the start of the recording the engineer will replay"><span class="tb-ic">${ICON_REC}</span><span class="tb-label">Mark start</span></button>
+      <button class="tool-btn save-cta" id="saveViewBtn" title="Save this screen — lock it here; finish edits in the console">Save</button>
       <button class="icon-btn" id="toggleBtn" title="Show screens & pins">${ICON_CHEVRON_DOWN}</button>
     </div>
     <div class="confirm-bar" id="confirmBar" hidden>
@@ -1104,8 +1119,8 @@
       btn.title = 'Open recording details';
     } else {
       btn.classList.remove('active');
-      btn.innerHTML = `<span class="tb-ic">${ICON_REC}</span><span class="tb-label">Mark start</span>`;
-      btn.title = 'Mark the start of the recording the engineer will replay';
+      btn.innerHTML = REC_LABEL_RESTING;
+      btn.title = 'Start recording the path the engineer will replay';
     }
   }
 

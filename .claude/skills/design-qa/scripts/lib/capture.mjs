@@ -212,6 +212,11 @@ export async function attachCapture(store, {
     let count = 0;
     if (active) {
       for (const v of store.doc.views) count += Array.isArray(v.steps) ? v.steps.length : 0;
+      // Include in-memory segment-buffer entries so the live count reflects
+      // every captured action — even those on URLs the user hasn't pinned on
+      // yet. These may still be discarded on nav-without-pin (the v1 rule
+      // for persistence), but the LIVE counter should show real activity.
+      for (const buf of segmentBuffer.values()) count += buf.length;
     }
     return { active, count, startedAtMs, redactionCount: redactor.count };
   }
@@ -335,6 +340,13 @@ export async function attachCapture(store, {
     for (const v of store.doc.views) {
       if (!Array.isArray(v.steps)) continue;
       for (const s of v.steps) all.push(s);
+    }
+    // Include the in-memory segment buffer so the popover shows what the
+    // recorder has captured live, including events on URLs the user hasn't
+    // pinned yet. Same rationale as the count in currentRecorderState — see
+    // there for the "they may still be discarded on nav" caveat.
+    for (const buf of segmentBuffer.values()) {
+      for (const s of buf) all.push(s);
     }
     all.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
     const recent = all.slice(-POPOVER_STEP_CAP);
