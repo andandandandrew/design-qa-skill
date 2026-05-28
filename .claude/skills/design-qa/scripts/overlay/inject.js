@@ -108,7 +108,10 @@
       min-width: 0;
     }
     .panel.collapsed { width: auto; }
-    .panel:not(.collapsed) { width: 280px; }
+    /* Bumped from 280→360 in 9c so the Mark-start / Recording chip + chevron
+       both fit in the verb bar without overflow:hidden clipping the chevron.
+       The body (screens + pins lists) still reads well at this width. */
+    .panel:not(.collapsed) { width: 360px; }
     .panel.collapsed .panel-body { display: none; }
     .panel.collapsed .panel-header { border-bottom: none; }
 
@@ -116,6 +119,10 @@
       display: flex; gap: 2px; align-items: center;
       padding: 4px; border-bottom: 1px solid var(--border);
     }
+    /* Chevron is the always-clickable affordance — never let it shrink or wrap
+       out of view when the verb bar grows (e.g. when Mark-start becomes the
+       wider Recording · N chip). */
+    .panel-header .icon-btn { flex-shrink: 0; }
     /* Always-visible labeled verbs (Comment / Save / New). */
     .tool-btn {
       all: unset; cursor: pointer;
