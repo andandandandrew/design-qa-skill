@@ -124,20 +124,17 @@
        wider Recording · N chip). */
     .panel-header .icon-btn { flex-shrink: 0; }
     /* Save is the primary commit action — pushed to the right edge of the verb
-       bar (just before the chevron) and rendered as a SOLID accent-filled CTA
-       at all times (text white, fill blue). 9c-feedback-2: the opaque variant
-       — fill takes the color that the text used to be. The confirm-bar below
-       the verb bar is the primary signal that Save was clicked; the chip
-       darkens slightly on hover/active but never loses its solid look. */
+       bar (just before the chevron) and treated as a typography-only CTA in
+       the accent color, no icon. Active state keeps the existing solid-accent
+       background used while the inline confirm bar is open. */
     .tool-btn.save-cta {
       margin-left: auto;
-      background: var(--accent);
-      color: #ffffff;
+      color: var(--accent);
       font-weight: 600;
     }
-    .tool-btn.save-cta:hover { background: var(--accent-hover); color: #ffffff; }
+    .tool-btn.save-cta:hover { background: var(--accent-dim); color: var(--accent); }
     .tool-btn.save-cta.active,
-    .tool-btn.save-cta.active:hover { background: var(--accent-hover); color: #ffffff; }
+    .tool-btn.save-cta.active:hover { background: var(--accent); color: #ffffff; }
     /* Always-visible labeled verbs (Comment / Save / New). */
     .tool-btn {
       all: unset; cursor: pointer;
@@ -351,16 +348,20 @@
 
     /* Spike 8 — Recording chip + popover */
     .tool-btn.recorder-chip.active {
-      background: var(--danger);
-      color: #ffffff;
+      background: rgba(242, 72, 34, 0.16);
+      color: #ff4f33;
     }
     .tool-btn.recorder-chip.active:hover {
-      background: #d63d1e;
+      background: rgba(242, 72, 34, 0.25);
     }
-    .tool-btn.recorder-chip .rec-count {
-      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
-      font-size: 10px; font-weight: 700;
-      font-feature-settings: 'tnum';
+    .tool-btn.recorder-chip .rec-dot {
+      width: 8px; height: 8px; border-radius: 999px; background: #ff4f33;
+      flex-shrink: 0; display: inline-block;
+      animation: rec-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes rec-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
     }
     .rec-popover {
       position: fixed; right: 12px; width: 320px;
@@ -469,19 +470,20 @@
   const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
   const ICON_REC = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>`;
 
-  // Icon-only verbs (9c-feedback-2): Comment / Record / New show their glyph
-  // alone in the verb bar. Tooltips on hover communicate state.
-  const ADD_LABEL = `<span class="tb-ic">${ICON_COMMENT}</span>`;
-  const CANCEL_LABEL = `<span class="tb-ic">${ICON_X}</span>`;
-  const REC_LABEL_RESTING = `<span class="tb-ic">${ICON_REC}</span>`;
+  // addBtn label content (icon + word); swapped to a Cancel state in placement mode.
+  const ADD_LABEL = `<span class="tb-ic">${ICON_COMMENT}</span><span class="tb-label">Comment</span>`;
+  const CANCEL_LABEL = `<span class="tb-ic">${ICON_X}</span><span class="tb-label">Cancel</span>`;
+  // Spike 8 recorder chip — resting label shows the icon + verb; active label
+  // (rendered later in renderRecorderChip) drops the icon for a pulsing red dot.
+  const REC_LABEL_RESTING = `<span class="tb-ic">${ICON_REC}</span><span class="tb-label">Record</span>`;
 
   const panel = document.createElement('div');
   panel.className = 'panel collapsed';
   panel.innerHTML = `
     <div class="panel-header">
-      <button class="tool-btn" id="addBtn" title="Drop a comment — click, then click on the page">${ADD_LABEL}</button>
+      <button class="tool-btn" id="addBtn" title="Click, then click on the page to drop a comment">${ADD_LABEL}</button>
       <button class="tool-btn recorder-chip" id="recBtn" title="Start recording the path the engineer will replay">${REC_LABEL_RESTING}</button>
-      <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span></button>
+      <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span><span class="tb-label">New</span></button>
       <button class="tool-btn save-cta" id="saveViewBtn" title="Save this screen — lock it here; finish edits in the console">Save</button>
       <button class="icon-btn" id="toggleBtn" title="Show screens & pins">${ICON_CHEVRON_DOWN}</button>
     </div>
@@ -1113,8 +1115,8 @@
     const r = STATE.recorder;
     if (r.active) {
       btn.classList.add('active');
-      btn.innerHTML = `<span class="tb-ic">${ICON_REC}</span><span class="rec-count">${r.count}</span>`;
-      btn.title = `Recording · ${r.count} step${r.count === 1 ? '' : 's'} · click for details`;
+      btn.innerHTML = `<span class="rec-dot"></span><span class="tb-label">Recording · ${r.count}</span>`;
+      btn.title = 'Open recording details';
     } else {
       btn.classList.remove('active');
       btn.innerHTML = REC_LABEL_RESTING;
