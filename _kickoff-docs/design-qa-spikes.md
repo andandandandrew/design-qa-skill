@@ -127,13 +127,28 @@ These spikes are a precondition to committing to the skill spec. Findings will s
 
 ---
 
-## Spike 8 — Interaction recording & replay *(post-demo, 2026-05-27; UX still to design)*
+## Spike 8 — Interaction recording & replay *(post-demo, 2026-05-27; design + POC complete 2026-05-28)*
 
-**Status (2026-05-28):** NOT started. The Phase-7 bundle has a reserved slot — the
-exported `README.md` literally says "a future Playwright-script slot (Spike 8) not yet
-written" — so the export shape is ready; the recording mechanism, the emission format, and
-the **UX in both the capture overlay and the console** still need to be designed before
-any code. Research-and-UX-design pass is the next ask from the user.
+**Status (2026-05-28):** DESIGN + POC COMPLETE; PHASING IS THE NEXT ASK. Full
+design at `_kickoff-docs/design-qa-interaction-recording.md`. Mechanism validated
+against an Auth0-protected app — Playwright 1.60.0's private `context._enableRecorder`
++ `recorderMode: 'api'` works, no Inspector window, getByRole-quality selectors,
+URL segmentation works via per-event `pageUrl`. Throwaway POC at
+`.claude/skills/design-qa/scripts/spike8-poc.mjs` (output `spike8-poc-out/`,
+gitignored). Headless mechanism smoke at `spike8-smoke.mjs`; headless redaction
+smoke at `spike8-redaction-smoke.mjs` (planned to port under `scripts/lib/__tests__/`
+as a permanent regression when 9a lands).
+
+**🚨 The POC surfaced an unanticipated security finding:** the recorder serializes
+raw fill values into `action.text`, the `.ts` `code` snippet, AND the `ariaSnapshot`
+ARIA-tree string (which lists every visible input's current value — so a password
+typed at step 3 keeps appearing in every subsequent action's snapshot). The
+original design treated auth as "the engineer's problem" (no `storageState`
+shipping); that handled tokens but missed the more immediate credential-leak
+vector while the reviewer types into the live form. A capture-time redaction
+layer was added to the design doc and validated by smoke. **Redaction is a
+security boundary — must land in the same phase as the recorder adapter (9a),
+not later.** Full algorithm + tradeoffs in the design doc §"POC results" + §4.
 
 **Question.** When capturing from the browser, can we also record the series of interactions the QA person took to reach the annotated state, and emit it both as (a) an executable Playwright script and (b) a human-followable step list? *(Decision: emit BOTH forms.)*
 
