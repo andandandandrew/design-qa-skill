@@ -11,8 +11,11 @@ import { sessionSubPaths } from './paths.mjs';
  * one JSON line, reads one JSON line back, closes.
  */
 
-export function server({ sessionDir, handle }) {
-  const { socket: socketPath } = sessionSubPaths(sessionDir);
+export function server({ sessionDir, socketPath, handle }) {
+  // Caller may pass an explicit socketPath (the daemon binds at its *computed*
+  // path, independent of any pointer file it is about to write). Otherwise
+  // derive it the same way the CLI does.
+  const bindPath = socketPath || sessionSubPaths(sessionDir).socket;
   const srv = net.createServer((conn) => {
     let buf = '';
     conn.setEncoding('utf8');
@@ -40,7 +43,7 @@ export function server({ sessionDir, handle }) {
   });
   return new Promise((resolve, reject) => {
     srv.once('error', reject);
-    srv.listen(socketPath, () => resolve(srv));
+    srv.listen(bindPath, () => resolve(srv));
   });
 }
 

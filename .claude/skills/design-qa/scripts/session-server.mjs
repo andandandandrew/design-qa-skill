@@ -40,11 +40,26 @@ const sessionDir = path.resolve(opts.sessionDir);
 const subs = sessionSubPaths(sessionDir);
 const log = (msg) => console.log(`session-server: ${msg}`);
 
+// Shutdown timing. Overridable via env so the seal-timeout and watchdog paths
+// can be exercised end-to-end quickly; the defaults are the production values.
+const envInt = (name, def) => {
+  const v = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isInteger(v) && v >= 0 ? v : def;
+};
+const SEAL_TIMEOUT_MS = envInt('DESIGNQA_SEAL_TIMEOUT_MS', 8_000);
+const END_WATCHDOG_MS = envInt('DESIGNQA_END_WATCHDOG_MS', 20_000);
+const CLOSE_WATCHDOG_MS = envInt('DESIGNQA_CLOSE_WATCHDOG_MS', 15_000);
+const CAPTURE_CLOSE_TIMEOUT_MS = envInt('DESIGNQA_CAPTURE_CLOSE_TIMEOUT_MS', 5_000);
+// TEST-ONLY seam: inject an artificial stall into the seal path so a true hang
+// (not just an error) can be reproduced, proving the seal-timeout and watchdog
+// fire. Never set in production.
+const TEST_SEAL_HANG_MS = envInt('DESIGNQA_TEST_SEAL_HANG_MS', 0);
+
 let cleanupRan = false;
 function cleanup() {
   if (cleanupRan) return;
   cleanupRan = true;
-  for (const f of [subs.socket, subs.pidFile, subs.consoleUrlFile]) {
+  for (const f of [subs.computedSocket, subs.socketPointer, subs.pidFile, subs.consoleUrlFile]) {
     try { fs.unlinkSync(f); } catch {}
   }
 }
@@ -58,6 +73,30 @@ process.on('uncaughtException', (err) => {
   process.exit(1);
 });
 
+/**
+ * Race a promise against a timeout. On timeout (or rejection) it logs and
+ * RESOLVES rather than rejecting, so a wedged step (e.g. a full-page screenshot
+ * of an unresponsive page) can never block shutdown. The underlying op is left
+ * to settle on its own; closing the browser later unblocks most stuck captures.
+ */
+function withTimeout(promise, ms, label) {
+  return new Promise((resolve) => {
+    let done = false;
+    const settle = (fn, v) => { if (!done) { done = true; clearTimeout(t); fn(v); } };
+    const t = setTimeout(() => {
+      if (done) return;
+      done = true;
+      log(`${label} timed out after ${ms}ms, continuing`);
+      resolve();
+    }, ms);
+    t.unref();
+    Promise.resolve(promise).then(
+      (v) => settle(resolve, v),
+      (e) => { log(`${label} failed: ${e?.message || e}`); settle(resolve); },
+    );
+  });
+}
+
 /** Open a URL in the user's normal browser (suppressible for tests). */
 function openInBrowser(url) {
   if (process.env.DESIGNQA_NO_OPEN) return;
@@ -69,6 +108,10 @@ function openInBrowser(url) {
 
 async function main() {
   fs.writeFileSync(subs.pidFile, String(process.pid));
+  // Record the socket path we will bind, derived from *this* process's tmpdir,
+  // so a later CLI call can reach us even if its own tmpdir differs. See
+  // lib/paths.mjs (socketPathFor) for why recomputing on the CLI side is unsafe.
+  fs.writeFileSync(subs.socketPointer, subs.computedSocket);
 
   const store = await SessionStore.load(sessionDir);
   log(`loaded session ${store.doc.id} (${store.doc.name})`);
@@ -90,6 +133,14 @@ async function main() {
     log(`config read failed, proceeding with default redaction only: ${err.message}`);
   }
 
+  // Seal the active view(s) ahead of shutdown. The optional stall is the
+  // TEST_SEAL_HANG_MS test seam — it runs regardless of capture so the
+  // timeout/watchdog paths can be tested under --no-capture (no Chromium).
+  async function sealActiveViews() {
+    if (TEST_SEAL_HANG_MS > 0) await new Promise((r) => setTimeout(r, TEST_SEAL_HANG_MS));
+    if (capture) await capture.finalizeActiveViews();
+  }
+
   // Capture hat — optional, lazy-attached only for browser capture.
   let capture = null;
   if (opts.capture) {
@@ -107,9 +158,16 @@ async function main() {
     // handling shutdown to avoid double-finalize.
     capture.onClose(async () => {
       if (ending) return;
+      ending = true; // claim shutdown so a racing `end` doesn't double-finalize
       log('capture browser closed, sealing active views + exiting');
-      try { await capture.finalizeActiveViews(); }
-      catch (e) { log(`finalize on close failed: ${e.message}`); }
+      const watchdog = setTimeout(() => {
+        log('close watchdog fired — forcing exit');
+        cleanup();
+        process.exit(0);
+      }, CLOSE_WATCHDOG_MS);
+      watchdog.unref();
+      await withTimeout(sealActiveViews(), SEAL_TIMEOUT_MS, 'finalizeActiveViews (close)');
+      clearTimeout(watchdog);
       httpSrv.close();
       try { srv.close(); } catch {}
       cleanup();
@@ -125,6 +183,7 @@ async function main() {
   let ending = false;
   const srv = await ipcServer({
     sessionDir,
+    socketPath: subs.computedSocket,
     handle: async (msg) => {
       if (ending) return { ready: false, ending: true };
       if (msg.type === 'ping') return { ready: true, consoleUrl: httpSrv.consoleUrl };
@@ -141,12 +200,27 @@ async function main() {
       }
       if (msg.type === 'end') {
         ending = true;
-        if (capture) await capture.finalizeActiveViews();
+        // Watchdog: even if seal or artifact build wedges, force-exit so the
+        // daemon can never become an un-endable zombie holding a headed
+        // browser. Once `ending` latches, the guard above rejects every future
+        // `end`, so without this the only recovery would be `kill`.
+        const watchdog = setTimeout(() => {
+          log('end watchdog fired — forcing exit');
+          cleanup();
+          process.exit(0);
+        }, END_WATCHDOG_MS);
+        watchdog.unref();
+        await withTimeout(sealActiveViews(), SEAL_TIMEOUT_MS, 'finalizeActiveViews');
         await store.markEnded();
-        await buildArtifact({ sessionDir, session: store.doc, outPath: subs.artifact });
+        await withTimeout(
+          buildArtifact({ sessionDir, session: store.doc, outPath: subs.artifact }),
+          SEAL_TIMEOUT_MS,
+          'buildArtifact',
+        );
         // Schedule shutdown after we've replied.
         setTimeout(async () => {
-          if (capture) await capture.close();
+          clearTimeout(watchdog);
+          if (capture) await withTimeout(capture.close(), CAPTURE_CLOSE_TIMEOUT_MS, 'capture.close');
           httpSrv.close();
           try { srv.close(); } catch {}
           cleanup();
