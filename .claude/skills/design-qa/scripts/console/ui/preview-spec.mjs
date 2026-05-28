@@ -1,10 +1,12 @@
 /**
- * `[Preview spec]` modal (Spike 8, phase 9d).
+ * `[Preview spec]` modal (Spike 8, phases 9d + 9g).
  *
  * Read-only preview of the would-be-shipped `recording.spec.ts`. Fetched
- * server-side via `store.fetchRecordingPreview()` so the live console and the
- * 9e bundle write use the SAME emitter (`lib/emit-spec.mjs`). No edits in
- * here — edits happen per-step in the disclosure (`ui/steps.mjs`).
+ * server-side via `store.fetchRecordingPreview(viewId)` so the live console and
+ * the bundle write use the SAME emitter (`lib/emit-spec.mjs`). When opened from
+ * a screen's Steps disclosure it scopes to THAT screen's checkpoint test (9g);
+ * with no view it shows the whole multi-test file. No edits in here — edits
+ * happen per-step in the disclosure (`ui/steps.mjs`).
  *
  * Surfaces a clickable **redaction-count chip** ("🛡 N values redacted") that
  * expands to the list of `DESIGN_QA_FIELD_*` env-var names referenced in the
@@ -19,8 +21,14 @@ import { showToast } from './toast.mjs';
 
 const BACKDROP_ID = 'dqa-preview-backdrop';
 
-export async function openPreviewSpec(ctx) {
+export async function openPreviewSpec(ctx, view = null) {
   closePreviewSpec();
+
+  const viewId = view?.id || null;
+  const screenLabel = view ? (view.name || view.url || 'this screen') : null;
+  const title = screenLabel
+    ? `Preview — reach feedback on ${screenLabel}`
+    : 'Preview recording.spec.ts';
 
   // Optimistic open — show a "Loading…" body, then fill once the emitter
   // responds. Keeps the click feeling immediate; the emitter is cheap but the
@@ -29,7 +37,7 @@ export async function openPreviewSpec(ctx) {
   const closeBtn = el('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: closePreviewSpec }, '×');
   const dialog = el('div', { class: 'preview-dialog', role: 'dialog', 'aria-label': 'Preview recording.spec.ts' }, [
     el('div', { class: 'preview-head' }, [
-      el('div', { class: 'preview-title' }, 'Preview recording.spec.ts'),
+      el('div', { class: 'preview-title' }, title),
       closeBtn,
     ]),
     body,
@@ -43,9 +51,9 @@ export async function openPreviewSpec(ctx) {
   document.addEventListener('keydown', previewKeydown);
 
   try {
-    const { text, envVars } = await ctx.store.fetchRecordingPreview();
+    const { text, envVars } = await ctx.store.fetchRecordingPreview(viewId);
     body.classList.remove('preview-loading');
-    body.replaceChildren(...buildBody(text, envVars));
+    body.replaceChildren(...buildBody(text, envVars, screenLabel));
   } catch (err) {
     body.classList.remove('preview-loading');
     body.replaceChildren(el('div', { class: 'preview-error' },
@@ -53,7 +61,7 @@ export async function openPreviewSpec(ctx) {
   }
 }
 
-function buildBody(text, envVars) {
+function buildBody(text, envVars, screenLabel = null) {
   const chip = buildRedactionChip(envVars);
   const copyBtn = el('button', {
     class: 'btn',
@@ -75,7 +83,9 @@ function buildBody(text, envVars) {
     codeBlock,
     el('div', { class: 'preview-foot' }, [
       el('span', { class: 'preview-foot-hint' },
-        'This is what 9e will write into the export bundle. Edits happen in the Steps list above.'),
+        screenLabel
+          ? `This checkpoint test reaches the feedback on “${screenLabel}”. The export bundle ships one test per annotated screen. Edits happen in the Steps list above.`
+          : 'This is what ships in the export bundle. Edits happen in the Steps list above.'),
     ]),
   ];
 }

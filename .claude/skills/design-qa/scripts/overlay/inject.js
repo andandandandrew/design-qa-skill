@@ -129,22 +129,22 @@
        out of view when the verb bar grows (e.g. when Mark-start becomes the
        wider Recording · N chip). */
     .panel-header .icon-btn { flex-shrink: 0; }
-    /* Save is the primary commit action — pushed to the right edge of the verb
-       bar (just before the chevron) and rendered as a SOLID accent-filled CTA
-       at all times (text white, fill blue). 9c-feedback-2: the opaque variant
-       — fill takes the color that the text used to be. The confirm-bar below
-       the verb bar is the primary signal that Save was clicked; the chip
-       darkens slightly on hover/active but never loses its solid look. */
-    .tool-btn.save-cta {
+    /* Done is the session-level wrap-up (9f, relabelled from "Save") — pushed to
+       the right edge of the verb bar (just before the chevron) and rendered as a
+       SOLID accent-filled CTA at all times (text white, fill blue). 9c-feedback-2:
+       the opaque variant — fill takes the color that the text used to be. The
+       confirm-bar below the verb bar is the primary signal that Done was clicked;
+       the chip darkens slightly on hover/active but never loses its solid look. */
+    .tool-btn.done-cta {
       margin-left: auto;
       background: var(--accent);
       color: #ffffff;
       font-weight: 600;
     }
-    .tool-btn.save-cta:hover { background: var(--accent-hover); color: #ffffff; }
-    .tool-btn.save-cta.active,
-    .tool-btn.save-cta.active:hover { background: var(--accent-hover); color: #ffffff; }
-    /* Always-visible labeled verbs (Comment / Save / New). */
+    .tool-btn.done-cta:hover { background: var(--accent-hover); color: #ffffff; }
+    .tool-btn.done-cta.active,
+    .tool-btn.done-cta.active:hover { background: var(--accent-hover); color: #ffffff; }
+    /* Always-visible labeled verbs (Comment / New / Record / Done). */
     .tool-btn {
       all: unset; cursor: pointer;
       display: inline-flex; align-items: center; gap: 5px;
@@ -170,7 +170,7 @@
     .icon-btn.active:hover { background: var(--accent-hover); }
     .icon-btn svg { width: 14px; height: 14px; display: block; }
 
-    /* Inline confirm for the one-way Save (native confirm() can't be used —
+    /* Inline confirm for the one-way Done (native confirm() can't be used —
        Playwright auto-dismisses it). Shows below the verb bar in either state. */
     .confirm-bar { padding: 9px 11px; border-bottom: 1px solid var(--border); background: var(--bg); }
     .confirm-bar[hidden] { display: none; }
@@ -493,14 +493,14 @@
       <button class="tool-btn" id="addBtn" title="Drop a comment — click, then click on the page">${ADD_LABEL}</button>
       <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span></button>
       <button class="tool-btn recorder-chip" id="recBtn" title="Start recording the path the engineer will replay">${REC_LABEL_RESTING}</button>
-      <button class="tool-btn save-cta" id="saveViewBtn" title="Save this screen — lock it here; finish edits in the console">Save</button>
+      <button class="tool-btn done-cta" id="doneBtn" title="Finish the review — seal this screen, lock the recorded path; continue in the console">Done</button>
       <button class="icon-btn" id="toggleBtn" title="Show screens & pins">${ICON_CHEVRON_DOWN}</button>
     </div>
     <div class="confirm-bar" id="confirmBar" hidden>
-      <div class="confirm-msg">Lock this screen? You won't be able to add or edit it here — finish in the console.</div>
+      <div class="confirm-msg">Finish this review? This seals the current screen and locks the recorded path the engineer replays. You'll continue any edits in the console.</div>
       <div class="confirm-actions">
-        <button class="confirm-cancel" id="saveCancelBtn">Cancel</button>
-        <button class="confirm-ok" id="saveConfirmBtn">Save</button>
+        <button class="confirm-cancel" id="doneCancelBtn">Cancel</button>
+        <button class="confirm-ok" id="doneConfirmBtn">Done</button>
       </div>
     </div>
     <div class="panel-body" id="panelBody">
@@ -1066,16 +1066,18 @@
     toast('New screen — give it a name');
   }
 
-  // "Save": seal the current screen so it becomes console-owned. Does NOT end
-  // the session — the browser stays live; placing a pin on this URL afterward
-  // auto-creates a fresh screen. The one-way nature is made explicit via an
-  // INLINE confirm in the toolbar (native confirm() is auto-dismissed by
-  // Playwright, so it can't be used here). See console-architecture lifecycle
-  // "Save feedback / Done".
+  // "Done" (9f): the SESSION-LEVEL wrap-up — seal the current screen AND
+  // finalize-keep the recording (lock view.steps, stop the recorder appending),
+  // pressed once at the end. Between-screen moves are navigation / "New" (those
+  // auto-seal and recording keeps running); Done is the "I'm finished" gesture.
+  // It does NOT close the browser — the session stays live so the user can keep
+  // reviewing in the console; closing the browser finalizes views on its own.
+  // The one-way nature is made explicit via an INLINE confirm in the toolbar
+  // (native confirm() is auto-dismissed by Playwright, so it can't be used).
 
-  function setSaveConfirm(open) {
+  function setDoneConfirm(open) {
     const bar = $('confirmBar');
-    const btn = $('saveViewBtn');
+    const btn = $('doneBtn');
     if (bar) bar.hidden = !open;
     if (btn) btn.classList.toggle('active', open);
     if (open) window.addEventListener('keydown', confirmEsc, { capture: true });
@@ -1083,24 +1085,33 @@
   }
 
   function confirmEsc(e) {
-    if (e.key === 'Escape') { e.preventDefault(); setSaveConfirm(false); }
+    if (e.key === 'Escape') { e.preventDefault(); setDoneConfirm(false); }
   }
 
-  // Gate before showing the confirm: nothing committed on this screen → toast.
-  function requestSaveCurrentScreen() {
+  // Gate before showing the confirm: Done is session-level, so it's available
+  // whenever there's something to finish — pins on THIS screen OR an active
+  // recording (whose path spans other screens). Nothing of either → toast.
+  function requestDone() {
     const realPins = STATE.pins.filter((p) => !String(p.id).startsWith(TEMP_PREFIX));
-    if (!STATE.viewId || realPins.length === 0) {
-      toast('Add a comment before saving this screen');
+    const hasCurrentPins = STATE.viewId && realPins.length > 0;
+    if (!hasCurrentPins && !STATE.recorder.active) {
+      toast('Add a comment or start recording before finishing');
       return;
     }
-    setSaveConfirm(true);
+    setDoneConfirm(true);
   }
 
-  async function performSaveCurrentScreen() {
-    setSaveConfirm(false);
-    let result;
-    try { result = await window.__designQA_sealCurrentView({ url: location.href }); }
-    catch (e) { console.warn('design-qa: sealCurrentView failed', e); return; }
+  async function performDone() {
+    setDoneConfirm(false);
+    // 1. Seal the current screen (if it carries pins or recorded steps). The
+    //    recording is still active here, so sealCurrentView preserves a
+    //    steps-only segment for a pass-through screen.
+    try { await window.__designQA_sealCurrentView({ url: location.href }); }
+    catch (e) { console.warn('design-qa: sealCurrentView failed', e); }
+    // 2. Finalize-keep the recording: locks view.steps, stops appending, rests
+    //    the chip. (This is __designQA_stopRecording's 9f meaning — NOT discard.)
+    try { await window.__designQA_stopRecording(); }
+    catch (e) { console.warn('design-qa: finalize recording failed', e); }
     // Reset local state: there's no editable view for this URL anymore. The next
     // pin's commit calls ensureView, which creates a fresh screen.
     STATE.viewId = null;
@@ -1109,9 +1120,7 @@
     renderPins();
     renderPopover();
     await refreshSession();
-    if (result.ok) toast('Feedback saved — make further changes in the console');
-    else if (result.reason === 'empty') toast('Add a comment before saving this screen');
-    else toast('Nothing to save on this screen');
+    toast('Done — recording locked; continue any edits in the console');
   }
 
   // ------- Spike 8 — Recording chip + popover --------------------------
@@ -1219,7 +1228,8 @@
       <div class="rec-popover-list"><div class="rec-popover-list-empty">Loading…</div></div>
       <div class="rec-popover-actions">
         <button class="ghost" id="recResetBtn" title="Move the start of recording to now">Reset start here</button>
-        <button class="danger" id="recStopBtn" title="Turn recording off; existing steps move to preconditions">Stop recording</button>
+        <button class="ghost" id="recStopBtn" title="Finish recording — keep the recorded path the engineer will replay">Stop recording</button>
+        <button class="danger" id="recDiscardBtn" title="Throw away the recorded path — captured steps move to preconditions as hints">Discard</button>
       </div>
     `;
     chrome.appendChild(recPopoverEl);
@@ -1295,8 +1305,26 @@
       return;
     }
     if (id === 'recStopBtn') {
+      // 9f: "Stop recording" now FINALIZES-KEEP — locks the recorded path,
+      // doesn't dump it. (__designQA_stopRecording maps to finalizeRecording.)
       try { await window.__designQA_stopRecording(); }
-      catch (err) { console.warn('design-qa: stopRecording failed', err); }
+      catch (err) { console.warn('design-qa: finalize recording failed', err); }
+      // The push handler closes the popover when active flips false.
+      return;
+    }
+    if (id === 'recDiscardBtn') {
+      // 9f: the explicit throw-away. Confirm first (it empties the recorded
+      // path); native confirm() is auto-dismissed by Playwright, so use the
+      // shadow-DOM confirmModal.
+      const ok = await confirmModal({
+        title: 'Discard recording?',
+        body: 'The recorded path will be cleared. Captured steps move to preconditions as hints. This can’t be undone here.',
+        confirmLabel: 'Discard',
+        danger: true,
+      });
+      if (!ok) return;
+      try { await window.__designQA_discardRecording(); }
+      catch (err) { console.warn('design-qa: discardRecording failed', err); }
       // The push handler closes the popover when active flips false.
       return;
     }
@@ -1462,12 +1490,12 @@
     const btn = e.target?.closest?.('button');
     if (!btn) return;
     const id = btn.id;
-    if (id === 'addBtn') { setSaveConfirm(false); setPlacementMode(!STATE.placementMode); return; }
+    if (id === 'addBtn') { setDoneConfirm(false); setPlacementMode(!STATE.placementMode); return; }
     if (id === 'toggleBtn') { setInspectorExpanded(!STATE.inspectorExpanded); return; }
-    if (id === 'saveViewBtn') { requestSaveCurrentScreen(); return; }
-    if (id === 'saveCancelBtn') { setSaveConfirm(false); return; }
-    if (id === 'saveConfirmBtn') { performSaveCurrentScreen(); return; }
-    if (id === 'newViewBtn') { setSaveConfirm(false); startNewScreenHere(); return; }
+    if (id === 'doneBtn') { requestDone(); return; }
+    if (id === 'doneCancelBtn') { setDoneConfirm(false); return; }
+    if (id === 'doneConfirmBtn') { performDone(); return; }
+    if (id === 'newViewBtn') { setDoneConfirm(false); startNewScreenHere(); return; }
     if (id === 'recBtn') { onRecChipClick(); return; }
   });
 

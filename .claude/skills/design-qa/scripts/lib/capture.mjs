@@ -161,7 +161,7 @@ export async function attachCapture(store, {
    *  didn't pin. Pre-Mark-start the original "drop unannotated screens" rule
    *  still applies, since those steps would land in preconditionSteps anyway. */
   function isRecordingActive() {
-    return store.doc.recordingStartAt != null;
+    return store.doc.recordingStartAt != null && store.doc.recordingDoneAt == null;
   }
 
   /**
@@ -186,6 +186,10 @@ export async function attachCapture(store, {
 
   async function onRecorderEvent(ev) {
     if (ev.kind !== 'action') return; // signals don't become steps
+    // 9f: once the recording is finalized (Done / Stop recording), the path is
+    // LOCKED — drop every further event rather than leaking post-Done clicks
+    // into preconditions. Re-pressing Mark-start clears the marker and resumes.
+    if (store.doc.recordingDoneAt != null) return;
     const step = recorderEventToStep(ev);
     const url = ev.pageUrl || '';
 
@@ -212,6 +216,7 @@ export async function attachCapture(store, {
 
   async function onRecorderUpdate(ev /*, prev */) {
     if (ev.kind !== 'action' || !lastStep) return;
+    if (store.doc.recordingDoneAt != null) return; // path locked — see onRecorderEvent
     const updates = recorderEventToStep(ev);
     if (lastStep.location === 'buffer') {
       const buf = segmentBuffer.get(lastStep.url);
@@ -239,7 +244,9 @@ export async function attachCapture(store, {
   // pushed — that's pulled on popover open via __designQA_fetchRecorderSteps.
   function currentRecorderState() {
     const startedAtMs = store.doc.recordingStartAt;
-    const active = startedAtMs != null;
+    // 9f: a finalized recording (recordingDoneAt set) reads as NOT active — the
+    // chip returns to its resting "Record" state even though view.steps survive.
+    const active = startedAtMs != null && store.doc.recordingDoneAt == null;
     let count = 0;
     if (active) {
       for (const v of store.doc.views) count += Array.isArray(v.steps) ? v.steps.length : 0;
@@ -397,14 +404,26 @@ export async function attachCapture(store, {
     return overlayUiState;
   });
 
-  // Spike 8: Stop recording — turn off the recorded-path emitter without
-  // closing the recorder. Moves every existing view.steps[] entry back into
-  // preconditionSteps[] (chronological) and clears recordingStartAt. The
-  // popover's [Stop recording] button calls this; re-pressing Mark-start
-  // begins a fresh boundary.
+  // Spike 8 / 9f: Stop recording — FINALIZE-KEEP. Locks `view.steps[]` in place
+  // (the engineer-facing recorded path is preserved) and stamps recordingDoneAt
+  // so the recorder stops appending and the chip rests. Both the overlay's
+  // "Done" verb and the popover's [Stop recording] button call this. Re-pressing
+  // Mark-start clears the marker and resumes. ("Stop" ≠ "discard" — see below.)
   await context.exposeBinding('__designQA_stopRecording', async () => {
-    await store.stopRecording();
-    log('stop-recording');
+    await store.finalizeRecording();
+    log('finalize-recording (keep path)');
+    schedulePushRecorderState();
+    return { ok: true };
+  });
+
+  // Spike 8 / 9f: Discard recording — the EXPLICIT throw-away. Moves every
+  // view.steps[] entry back into preconditionSteps[] (chronological) as hints
+  // and clears both recording markers. This is the old stop-recording behavior,
+  // now reachable only via the popover's [Discard] button (guarded by a
+  // shadow-DOM confirm in the overlay). Re-pressing Mark-start begins fresh.
+  await context.exposeBinding('__designQA_discardRecording', async () => {
+    await store.discardRecording();
+    log('discard-recording (dump to preconditions)');
     schedulePushRecorderState();
     return { ok: true };
   });

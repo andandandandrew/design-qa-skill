@@ -76,10 +76,12 @@ export class HttpStore {
   unomitStep(args) { return this._mutate('unomitStep', args); }
 
   /** Fetch the would-be-shipped recording.spec.ts text + env vars referenced.
-   *  Powers the console's [Preview spec] modal. Returns null on transport
-   *  failure so the caller can decide how loudly to fail. */
-  async fetchRecordingPreview() {
-    const res = await fetch(`${this.base}/api/recording-preview`, { cache: 'no-store' });
+   *  Powers the console's [Preview spec] modal. `viewId` (9g) scopes the
+   *  preview to that screen's checkpoint test; omit for the whole file.
+   *  Throws on transport failure so the caller can decide how loudly to fail. */
+  async fetchRecordingPreview(viewId = null) {
+    const qs = viewId ? `?view=${encodeURIComponent(viewId)}` : '';
+    const res = await fetch(`${this.base}/api/recording-preview${qs}`, { cache: 'no-store' });
     if (!res.ok) throw new Error(`preview failed (${res.status})`);
     return res.json();
   }

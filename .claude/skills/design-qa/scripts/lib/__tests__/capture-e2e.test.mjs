@@ -221,22 +221,45 @@ test('capture pipeline — e2e: redaction + routing + seal-on-nav', async () => 
     assert.equal(fetchedDump.split(CANARY_PASSWORD).length - 1, 0,
       'fetchRecorderSteps response leaked the canary password');
 
-    // --- 2d. __designQA_stopRecording moves view.steps back to preconditions ---
+    // --- 2d. __designQA_stopRecording = FINALIZE-KEEP (9f) ------------------
+    // Reconciled meaning: lock the recorded path, KEEP view.steps where they
+    // are, stamp recordingDoneAt, leave recordingStartAt intact. The chip rests
+    // but the engineer-facing path survives. (NOT the old dump-to-preconditions.)
     const preCountBefore = (store.doc.preconditionSteps || []).length;
-    const movedStepCount = view.steps.length;
-    const stop = await page.evaluate(() => window.__designQA_stopRecording());
-    assert.equal(stop.ok, true);
-    assert.equal(store.doc.recordingStartAt, null);
-    // The previously-in-view steps are now in preconditions.
-    assert.equal((store.doc.preconditionSteps || []).length,
-      preCountBefore + movedStepCount,
-      'preconditionSteps should absorb the view.steps on stop');
-    assert.equal(view.steps.length, 0, 'view.steps should be empty after stop');
-    // Push should have delivered active=false eventually.
+    const keptStepCount = view.steps.length;
+    const startAtBefore = store.doc.recordingStartAt;
+    const fin = await page.evaluate(() => window.__designQA_stopRecording());
+    assert.equal(fin.ok, true);
+    assert.equal(store.doc.recordingStartAt, startAtBefore,
+      'finalize must keep recordingStartAt (the precondition boundary survives)');
+    assert.equal(typeof store.doc.recordingDoneAt, 'number',
+      'finalize must stamp recordingDoneAt');
+    assert.equal(view.steps.length, keptStepCount,
+      'finalize must KEEP view.steps (the recorded path), not dump them');
+    assert.equal((store.doc.preconditionSteps || []).length, preCountBefore,
+      'finalize must not move steps into preconditions');
+    // Push should have delivered active=false (chip rests though steps survive).
     await page.waitForTimeout(350);
-    const finalPushes = await page.evaluate(() => window.__pushes || []);
-    const afterStop = finalPushes[finalPushes.length - 1];
-    assert.equal(afterStop.active, false);
+    let pushesNow = await page.evaluate(() => window.__pushes || []);
+    assert.equal(pushesNow[pushesNow.length - 1].active, false,
+      'finalize should push active=false');
+
+    // --- 2d-bis. __designQA_discardRecording = throw-away (9f) --------------
+    // The explicit dump: view.steps move back to preconditions as hints, BOTH
+    // recording markers clear. This is the old stopRecording behavior, now its
+    // own action.
+    const dis = await page.evaluate(() => window.__designQA_discardRecording());
+    assert.equal(dis.ok, true);
+    assert.equal(store.doc.recordingStartAt, null, 'discard clears recordingStartAt');
+    assert.equal(store.doc.recordingDoneAt, null, 'discard clears recordingDoneAt');
+    assert.equal((store.doc.preconditionSteps || []).length,
+      preCountBefore + keptStepCount,
+      'discard should move the kept view.steps into preconditions');
+    assert.equal(view.steps.length, 0, 'view.steps should be empty after discard');
+    await page.waitForTimeout(350);
+    pushesNow = await page.evaluate(() => window.__pushes || []);
+    assert.equal(pushesNow[pushesNow.length - 1].active, false,
+      'discard should push active=false');
 
     // --- 3. Navigate to second fixture → triggers framenavigated → seal ---
     await page.goto(`file://${NAV_TARGET}`);
@@ -253,7 +276,7 @@ test('capture pipeline — e2e: redaction + routing + seal-on-nav', async () => 
     // navigate to find every step had vanished. Fix: materialize a sealed
     // steps-only view so the .ts emitter still sees the segment.
     {
-      // Re-arm recording for this case. (stopRecording above cleared it.)
+      // Re-arm recording for this case. (discardRecording above cleared it.)
       const mark2 = await page.evaluate(() => window.__designQA_markStart());
       assert.equal(mark2.ok, true);
 

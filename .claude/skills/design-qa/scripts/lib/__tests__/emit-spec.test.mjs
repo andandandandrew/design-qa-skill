@@ -140,3 +140,92 @@ test('empty session emits a placeholder note in both blocks', () => {
   assert.match(text, /no recorded steps/);
   assert.deepEqual(envVars, []);
 });
+
+// ---- 9g: per-screen cumulative checkpoints --------------------------------
+
+test('emits one test() per annotated screen, each cumulative to that screen', () => {
+  const { text } = emitRecordingSpec(makeDoc({
+    views: [
+      { id: 'v1', name: 'Login', url: 'u1', pins: [{ id: 'p1' }], steps: [
+        { id: 'a', kind: 'openPage', code: "await page.goto('u1');", t: 1, pageUrl: 'u1' },
+      ] },
+      { id: 'v2', name: 'Dashboard', url: 'u2', pins: [{ id: 'p2' }], steps: [
+        { id: 'b', kind: 'click', code: "await page.click('#widget');", t: 2, pageUrl: 'u2' },
+      ] },
+    ],
+  }));
+  const iLogin = text.indexOf("test('Reach feedback on: Login'");
+  const iDash = text.indexOf("test('Reach feedback on: Dashboard'");
+  assert.ok(iLogin >= 0, 'expected a Login checkpoint test');
+  assert.ok(iDash > iLogin, 'expected a Dashboard checkpoint test after Login');
+  // Login checkpoint is truncated: Login steps only, NOT Dashboard steps.
+  const loginBlock = text.slice(iLogin, iDash);
+  assert.ok(loginBlock.includes("await page.goto('u1')"), 'Login block missing its own step');
+  assert.ok(!loginBlock.includes('#widget'), 'Login checkpoint leaked Dashboard steps');
+  // Dashboard checkpoint is cumulative: includes Login + Dashboard steps.
+  const dashBlock = text.slice(iDash);
+  assert.ok(dashBlock.includes("await page.goto('u1')"), 'Dashboard checkpoint is not cumulative');
+  assert.ok(dashBlock.includes('#widget'), 'Dashboard checkpoint missing its own step');
+});
+
+test('pass-through (pinless) screens are intermediate steps, not their own test', () => {
+  const { text } = emitRecordingSpec(makeDoc({
+    views: [
+      { id: 'v1', name: 'Login', url: 'u1', pins: [{ id: 'p' }], steps: [
+        { id: 'a', kind: 'openPage', code: "await page.goto('u1');", t: 1, pageUrl: 'u1' },
+      ] },
+      { id: 'v2', name: 'Interstitial', url: 'u2', pins: [], steps: [
+        { id: 'b', kind: 'click', code: "await page.click('#mid');", t: 2, pageUrl: 'u2' },
+      ] },
+      { id: 'v3', name: 'Settings', url: 'u3', pins: [{ id: 'p3' }], steps: [
+        { id: 'c', kind: 'click', code: "await page.click('#set');", t: 3, pageUrl: 'u3' },
+      ] },
+    ],
+  }));
+  assert.ok(text.includes("test('Reach feedback on: Login'"));
+  assert.ok(text.includes("test('Reach feedback on: Settings'"));
+  assert.ok(!text.includes("Reach feedback on: Interstitial"),
+    'pass-through screen must not get its own test');
+  // The Settings checkpoint (cumulative) still includes the interstitial steps.
+  const settingsBlock = text.slice(text.indexOf("test('Reach feedback on: Settings'"));
+  assert.ok(settingsBlock.includes('--- view: Interstitial ---'),
+    'cumulative path should include the pass-through divider');
+  assert.ok(settingsBlock.includes('#mid') && settingsBlock.includes('#set'),
+    'cumulative path should include both interstitial and settings steps');
+});
+
+test('viewId option scopes to a single screen checkpoint test', () => {
+  const doc = makeDoc({
+    views: [
+      { id: 'v1', name: 'Login', url: 'u1', pins: [{ id: 'p1' }], steps: [
+        { id: 'a', kind: 'openPage', code: "await page.goto('u1');", t: 1, pageUrl: 'u1' },
+      ] },
+      { id: 'v2', name: 'Dashboard', url: 'u2', pins: [{ id: 'p2' }], steps: [
+        { id: 'b', kind: 'click', code: "await page.click('#widget');", t: 2, pageUrl: 'u2' },
+      ] },
+    ],
+  });
+  const { text } = emitRecordingSpec(doc, { viewId: 'v1' });
+  assert.ok(text.includes("test('Reach feedback on: Login'"));
+  assert.ok(!text.includes("Reach feedback on: Dashboard"),
+    'scoped preview should emit only the requested screen');
+  assert.ok(!text.includes('#widget'), 'scoped Login preview leaked Dashboard steps');
+});
+
+test('no annotated screens → single fallback Reproduce test over the whole path', () => {
+  const { text } = emitRecordingSpec(makeDoc({
+    views: [
+      { id: 'v1', name: 'a', url: 'u1', pins: [], steps: [
+        { id: 's1', kind: 'openPage', code: "await page.goto('u1');", t: 1, pageUrl: 'u1' },
+      ] },
+      { id: 'v2', name: 'b', url: 'u2', pins: [], steps: [
+        { id: 's2', kind: 'click', code: "await page.click('#z');", t: 2, pageUrl: 'u2' },
+      ] },
+    ],
+  }));
+  assert.match(text, /test\('Reproduce: demo session'/);
+  assert.ok(!text.includes('Reach feedback on:'), 'no checkpoints expected without pins');
+  // Exactly one test() call (match `test('` to avoid the doc-comment mention).
+  assert.equal((text.match(/test\('/g) || []).length, 1);
+  assert.ok(text.includes("await page.goto('u1')") && text.includes('#z'));
+});

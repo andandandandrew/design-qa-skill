@@ -373,12 +373,15 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
       if (req.method === 'GET' && url === '/api/recording-preview') {
         // Spike 8 / 9d: emit the would-be-shipped recording.spec.ts on demand
         // for the console's [Preview spec] modal. Optional `?id=<basename>`
-        // targets a sibling (lookback). The emitter is pure — pass the doc
-        // and return both the text and the env-var set the modal's chip needs.
+        // targets a sibling (lookback). Optional `?view=<viewId>` (9g) scopes
+        // the preview to that screen's single checkpoint test instead of the
+        // whole multi-test file. The emitter is pure — pass the doc and return
+        // both the text and the env-var set the modal's chip needs.
         const target = await resolveTargetStore(query.get('id'));
         if (target === null) return void sendJson(res, 404, { ok: false, error: 'unknown session id' });
         try {
-          const { text, envVars } = emitRecordingSpec(target.doc);
+          const viewId = query.get('view') || null;
+          const { text, envVars } = emitRecordingSpec(target.doc, { viewId });
           return void sendJson(res, 200, { text, envVars, redactionCount: envVars.length });
         } catch (err) {
           return void sendJson(res, 500, { ok: false, error: String(err?.message || err) });

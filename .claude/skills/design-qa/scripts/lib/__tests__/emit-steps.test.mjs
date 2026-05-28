@@ -139,3 +139,25 @@ test('empty session emits placeholders in both sections', () => {
   assert.match(text, /## Recorded path/);
   assert.match(text, /_No recorded steps/);
 });
+
+test('annotated screens are flagged checkpoints; numbering is continuous', () => {
+  const text = emitRecordingSteps(makeDoc({
+    views: [
+      { id: 'v1', name: 'Login', url: 'u1', pins: [{ id: 'p' }], steps: [
+        { id: 'a', kind: 'click', humanText: 'Click login', code: "await page.click('#a');", t: 1, pageUrl: 'u1' },
+      ] },
+      { id: 'v2', name: 'Interstitial', url: 'u2', pins: [], steps: [
+        { id: 'b', kind: 'click', humanText: 'Pass through', code: "await page.click('#b');", t: 2, pageUrl: 'u2' },
+      ] },
+    ],
+  }));
+  // Annotated screen → checkpoint heading + replay note.
+  assert.match(text, /### 📍 Login — checkpoint/);
+  assert.match(text, /Replaying steps 1–1 reaches the feedback/);
+  // Pass-through screen → plain heading, no checkpoint marker.
+  assert.match(text, /^### Interstitial$/m);
+  assert.ok(!/### 📍 Interstitial/.test(text), 'pass-through screen wrongly marked a checkpoint');
+  // Continuous numbering across screens.
+  assert.match(text, /^1\. Click login/m);
+  assert.match(text, /^2\. Pass through/m);
+});

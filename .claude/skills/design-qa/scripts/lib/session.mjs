@@ -40,6 +40,13 @@ export function emptySession({
     // part of the engineer-facing recorded path). `null` after migration of
     // pre-Spike-8 docs is correct — they have no recording.
     recordingStartAt: null,
+    // Spike 8 / 9f: timestamp of the "Done" / "Stop recording" press that
+    // FINALIZED the recorded path. Non-null means the recording is locked —
+    // `view.steps[]` are frozen and the recorder stops appending. `recordingStartAt`
+    // stays set (the precondition boundary survives) so the forensic per-screen
+    // `.spec.ts` still emits. `null` = either still recording, never recorded,
+    // or discarded. See finalizeRecording() vs discardRecording().
+    recordingDoneAt: null,
     // Spike 8: recorder steps captured BEFORE Mark-start. Emitted into the
     // `.spec.ts` `// === PRECONDITION ===` block (commented out, as hints).
     preconditionSteps: [],
@@ -84,9 +91,12 @@ async function normalizeViewPins(sessionDir, view) {
  *  v2→v3: adds top-level `author/project/stack/captureMode` (all null for
  *         pre-config sessions; new sessions stamp these from config at start).
  *  v3→v4: Spike 8. Adds top-level `recordingStartAt: null` +
- *         `preconditionSteps: []`, and `view.steps: []` per view. Pre-Spike-8
- *         docs end up with empty arrays — they're treated as "no recording
- *         was captured," which is the correct outcome for legacy data.
+ *         `recordingDoneAt: null` (9f) + `preconditionSteps: []`, and
+ *         `view.steps: []` per view. Pre-Spike-8 docs end up with empty arrays
+ *         / null markers — they're treated as "no recording was captured,"
+ *         which is the correct outcome for legacy data. `recordingDoneAt` is
+ *         folded into v4 additively (no version bump): an undefined marker on
+ *         an existing v4 doc backfills to null below.
  * Returns true if anything changed.
  */
 export async function migrateDoc(sessionDir, doc) {
@@ -97,6 +107,7 @@ export async function migrateDoc(sessionDir, doc) {
   if (doc.stack === undefined) { doc.stack = null; changed = true; }
   if (doc.captureMode === undefined) { doc.captureMode = null; changed = true; }
   if (doc.recordingStartAt === undefined) { doc.recordingStartAt = null; changed = true; }
+  if (doc.recordingDoneAt === undefined) { doc.recordingDoneAt = null; changed = true; }
   if (!Array.isArray(doc.preconditionSteps)) { doc.preconditionSteps = []; changed = true; }
   for (const view of doc.views) {
     if (view.source == null) { view.source = 'browser'; changed = true; }
@@ -457,6 +468,10 @@ export class SessionStore {
    */
   async setRecordingStartAt(ts) {
     this.doc.recordingStartAt = ts;
+    // Pressing Mark-start (or "Reset start here") after a finalize re-arms an
+    // active recording — clear the done marker so isRecordingActive() flips
+    // back on and the chip leaves the resting state. See finalizeRecording().
+    this.doc.recordingDoneAt = null;
     if (!Array.isArray(this.doc.preconditionSteps)) this.doc.preconditionSteps = [];
     for (const view of this.doc.views) {
       if (!Array.isArray(view.steps) || view.steps.length === 0) continue;
@@ -530,13 +545,31 @@ export class SessionStore {
   }
 
   /**
-   * Turn the recorded-path emitter OFF. Clears `recordingStartAt`, moves
-   * every `view.steps[]` entry back into `preconditionSteps[]` (chronological),
-   * and keeps the recorder itself running so the next Mark-start press picks
-   * the boundary back up. Per design doc §6: "Stop recording" exists for
-   * off-script side errands the reviewer doesn't want in the bundled spec.
+   * Finalize the recorded path — the "I'm done recording" gesture (9f). KEEPS
+   * every `view.steps[]` entry exactly where it is (the engineer-facing
+   * RECORDED PATH survives), and stamps `recordingDoneAt` to LOCK the path and
+   * stop the recorder appending. `recordingStartAt` is deliberately left in
+   * place so the precondition boundary — and the forensic per-screen `.spec.ts`
+   * — still emit. This is what the overlay's "Done" and the popover's
+   * "Stop recording" both mean. ("I stopped recording" ≠ "throw away what I
+   * recorded" — that's discardRecording().) Idempotent. See design doc §15.2.
    */
-  async stopRecording() {
+  async finalizeRecording(ts = Date.now()) {
+    this.doc.recordingDoneAt = ts;
+    await this.persist();
+    return ts;
+  }
+
+  /**
+   * Discard the recorded path — the EXPLICIT throw-away (9f, "Discard
+   * recording" in the popover). Moves every `view.steps[]` entry back into
+   * `preconditionSteps[]` (chronological) as hints, then clears BOTH recording
+   * markers so the chip rests and the recorder routes future events to
+   * preconditions again. The recorder itself keeps running, so a fresh
+   * Mark-start can start over. This is the old `stopRecording` behavior,
+   * renamed once "stop" was reconciled to mean finalize-keep (design doc §15.2).
+   */
+  async discardRecording() {
     if (!Array.isArray(this.doc.preconditionSteps)) this.doc.preconditionSteps = [];
     for (const view of this.doc.views) {
       if (!Array.isArray(view.steps) || view.steps.length === 0) continue;
@@ -545,6 +578,7 @@ export class SessionStore {
     }
     this.doc.preconditionSteps.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
     this.doc.recordingStartAt = null;
+    this.doc.recordingDoneAt = null;
     await this.persist();
   }
 

@@ -74,10 +74,13 @@ export class LookbackStore {
   unomitStep(args) { return this._mutate('unomitStep', args); }
 
   /** Preview the sibling's recording.spec.ts via the server's pure emitter.
-   *  Returns the same shape as HttpStore.fetchRecordingPreview(). */
-  async fetchRecordingPreview() {
+   *  Returns the same shape as HttpStore.fetchRecordingPreview(); `viewId` (9g)
+   *  scopes to that screen's checkpoint test. */
+  async fetchRecordingPreview(viewId = null) {
+    const params = new URLSearchParams({ id: this.basename });
+    if (viewId) params.set('view', viewId);
     const res = await fetch(
-      `${this.base}/api/recording-preview?id=${encodeURIComponent(this.basename)}`,
+      `${this.base}/api/recording-preview?${params.toString()}`,
       { cache: 'no-store' },
     );
     if (!res.ok) throw new Error(`preview failed (${res.status})`);

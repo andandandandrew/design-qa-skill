@@ -69,6 +69,7 @@ test('migration preserves existing v4 data without clobbering it', async () => {
   const doc = v3Doc();
   doc.version = 4;
   doc.recordingStartAt = '2026-05-28T00:01:23.000Z';
+  doc.recordingDoneAt = null; // present so this is a complete current v4 doc
   doc.preconditionSteps = [{ kind: 'action', code: '// existing' }];
   doc.views[0].steps = [{ kind: 'action', code: 'await page.click(...)' }];
   const changed = await migrateDoc('/tmp/does-not-exist', doc);

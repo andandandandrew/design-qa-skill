@@ -15,8 +15,8 @@
  * (MemoryStore fixture path), the disclosure renders read-only.
  *
  * `[Preview spec]` is inline with the disclosure row per design doc §7.
- * The modal it opens shows the WHOLE-session spec (not just this view);
- * placement is just for proximity to the steps that motivated opening it.
+ * The modal it opens scopes to THIS screen's checkpoint test (9g) — the
+ * cumulative path that reaches the feedback on this view, not the whole file.
  */
 import { el } from '../lib/dom.mjs';
 import { showToast } from './toast.mjs';
@@ -52,8 +52,8 @@ export function renderStepsDisclosure(ctx) {
   const previewBtn = previewAvailable
     ? el('button', {
         class: 'steps-preview-btn',
-        title: 'Preview the recording.spec.ts that will ship with this session',
-        onclick: (e) => { e.stopPropagation(); openPreviewSpec(ctx); },
+        title: 'Preview the checkpoint test that reaches this screen in recording.spec.ts',
+        onclick: (e) => { e.stopPropagation(); openPreviewSpec(ctx, view); },
       }, 'Preview spec')
     : null;
 

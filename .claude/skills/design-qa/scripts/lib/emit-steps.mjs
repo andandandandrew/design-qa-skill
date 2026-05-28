@@ -1,5 +1,5 @@
 /**
- * Recording → `recording-steps.md` text emitter (Spike 8, phase 9e).
+ * Recording → `recording-steps.md` text emitter (Spike 8, phases 9e + 9g).
  *
  * Pure: takes a session doc, returns a Markdown string. No `fs`, no Playwright,
  * no Node-only APIs — the mirror of `emit-spec.mjs` in shape, safe to import
@@ -9,6 +9,13 @@
  * precondition + recorded-path split the console "Steps" disclosure and the
  * Preview-spec modal show, rendered as prose for an engineer who'd rather
  * follow the path by hand than run Playwright.
+ *
+ * CHECKPOINT FRAMING (9g — mirrors emit-spec.mjs): the recorded path is
+ * cumulative, and each ANNOTATED screen (≥1 pin) is a checkpoint. Steps are
+ * numbered continuously across the whole path, and annotated screens are
+ * flagged "📍 checkpoint" with a "replay steps 1–N to reach this feedback"
+ * note — the prose twin of the per-screen `test()` blocks in the spec.
+ * Pass-through screens stay plain `### <name>` sections (intermediate steps).
  *
  * Each step's display text reuses the SAME resolution the console popover uses
  * (`step.humanText` override → `describeAction(step)`), so the markdown reads
@@ -37,6 +44,7 @@ export function emitRecordingSteps(session) {
     .map((v) => ({
       view: v,
       steps: (v.steps || []).filter((s) => !s.omitted),
+      annotated: Array.isArray(v.pins) && v.pins.length > 0,
     }))
     .filter((seg) => seg.steps.length > 0);
 
@@ -82,16 +90,32 @@ export function emitRecordingSteps(session) {
     lines.push('_No recorded steps — press Mark-start in the capture overlay, then interact._');
     lines.push('');
   } else {
+    lines.push('The path is cumulative — each **📍 checkpoint** below is reached by replaying');
+    lines.push('every step from the top through that screen. The companion `recording.spec.ts`');
+    lines.push('has one test per checkpoint.');
+    lines.push('');
+    // Continuous step numbering across the whole path so a checkpoint can say
+    // "replay steps 1–N to reach this feedback."
+    let n = 0;
     for (const seg of recordedSegments) {
-      const viewName = (seg.view && (seg.view.name || seg.view.url)) || '(unnamed view)';
-      lines.push(`### ${viewName}`);
+      const viewName = screenName(seg.view);
+      lines.push(seg.annotated ? `### 📍 ${viewName} — checkpoint` : `### ${viewName}`);
       lines.push('');
-      seg.steps.forEach((step, i) => lines.push(`${i + 1}. ${humanFor(step)}`));
+      seg.steps.forEach((step) => { n += 1; lines.push(`${n}. ${humanFor(step)}`); });
       lines.push('');
+      if (seg.annotated) {
+        lines.push(`_Replaying steps 1–${n} reaches the feedback on this screen._`);
+        lines.push('');
+      }
     }
   }
 
   return lines.join('\n');
+}
+
+/** Display name for a screen — view name, else its url, else a placeholder. */
+function screenName(view) {
+  return (view && (view.name || view.url)) || '(unnamed view)';
 }
 
 /** Resolve a step's display text — override wins, else describeAction (the
