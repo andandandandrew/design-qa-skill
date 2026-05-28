@@ -4,7 +4,7 @@ import { randomBytes } from 'node:crypto';
 import { sessionSubPaths } from './paths.mjs';
 import { pagePxToPct, pngDimensions, clampPct } from './coords.mjs';
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export function newId(prefix) {
   return `${prefix}_${randomBytes(6).toString('hex')}`;
@@ -35,6 +35,14 @@ export function emptySession({
     author,           // { name, email } | null
     createdAt: new Date().toISOString(),
     endedAt: null,
+    // Spike 8: timestamp of the most recent "Mark start" press. Until it's
+    // set, every captured recorder step is treated as a precondition (not
+    // part of the engineer-facing recorded path). `null` after migration of
+    // pre-Spike-8 docs is correct — they have no recording.
+    recordingStartAt: null,
+    // Spike 8: recorder steps captured BEFORE Mark-start. Emitted into the
+    // `.spec.ts` `// === PRECONDITION ===` block (commented out, as hints).
+    preconditionSteps: [],
     views: [],
   };
 }
@@ -75,6 +83,10 @@ async function normalizeViewPins(sessionDir, view) {
  *         computes `xPct/yPct` for sealed views that lack them.
  *  v2→v3: adds top-level `author/project/stack/captureMode` (all null for
  *         pre-config sessions; new sessions stamp these from config at start).
+ *  v3→v4: Spike 8. Adds top-level `recordingStartAt: null` +
+ *         `preconditionSteps: []`, and `view.steps: []` per view. Pre-Spike-8
+ *         docs end up with empty arrays — they're treated as "no recording
+ *         was captured," which is the correct outcome for legacy data.
  * Returns true if anything changed.
  */
 export async function migrateDoc(sessionDir, doc) {
@@ -84,8 +96,11 @@ export async function migrateDoc(sessionDir, doc) {
   if (doc.project === undefined) { doc.project = null; changed = true; }
   if (doc.stack === undefined) { doc.stack = null; changed = true; }
   if (doc.captureMode === undefined) { doc.captureMode = null; changed = true; }
+  if (doc.recordingStartAt === undefined) { doc.recordingStartAt = null; changed = true; }
+  if (!Array.isArray(doc.preconditionSteps)) { doc.preconditionSteps = []; changed = true; }
   for (const view of doc.views) {
     if (view.source == null) { view.source = 'browser'; changed = true; }
+    if (!Array.isArray(view.steps)) { view.steps = []; changed = true; }
     for (const p of view.pins) {
       if (p.author === undefined) { p.author = null; changed = true; }
       if (p.status == null) { p.status = 'open'; changed = true; }
@@ -175,6 +190,9 @@ export class SessionStore {
       createdAt: new Date().toISOString(),
       sealedAt: null,
       pins: [],
+      // Spike 8: recorder steps captured while this view was the live URL.
+      // Populated by 9b's segment-on-seal wiring; empty here in 9a.
+      steps: [],
     };
     this.doc.views.push(view);
     await this.persist();
@@ -207,6 +225,9 @@ export class SessionStore {
       createdAt: now,
       sealedAt: now,
       pins: [],
+      // Manual screens carry no recorded steps (no live browser captured them);
+      // the field exists so all views share a uniform shape.
+      steps: [],
     };
     this.doc.views.push(view);
     await this.persist();

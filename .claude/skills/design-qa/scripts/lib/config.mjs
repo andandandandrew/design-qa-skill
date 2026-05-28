@@ -75,11 +75,35 @@ export function normalizeConfig(cfg) {
   const name = (authorIn.name || '').trim();
   if (!name) throw new Error('config.author.name is required');
   const email = authorIn.email ? String(authorIn.email).trim() || null : null;
+  const redactionPatterns = normalizeRedactionPatterns(cfg.redactionPatterns);
   return {
     version: CONFIG_VERSION,
     project,
     stack,
     captureMode,
     author: { name, email },
+    // Spike 8 — optional additive regex patterns layered on top of the built-in
+    // defaults in lib/redact.mjs. Stored as strings (JSON-friendly); compiled
+    // case-insensitive at recorder-attach time. Empty array = use defaults only.
+    redactionPatterns,
   };
+}
+
+/**
+ * Coerce arbitrary user input into an array of non-empty pattern strings.
+ * Forgiving: accepts a single string, an array of strings, or nothing. Drops
+ * empty/non-string entries. Does NOT compile the patterns — that happens at
+ * use site (lib/redact.mjs), so a malformed regex surfaces with a useful
+ * error at recorder start rather than at config save.
+ */
+function normalizeRedactionPatterns(input) {
+  if (input == null) return [];
+  const arr = Array.isArray(input) ? input : [input];
+  const out = [];
+  for (const v of arr) {
+    if (typeof v !== 'string') continue;
+    const trimmed = v.trim();
+    if (trimmed) out.push(trimmed);
+  }
+  return out;
 }
