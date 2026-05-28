@@ -1,6 +1,8 @@
 import { createStore } from './store/index.mjs';
 import { createApp, wireControls } from './core.mjs';
 import { setupResizers } from './ui/resizers.mjs';
+import { showToast } from './ui/toast.mjs';
+import { el } from './lib/dom.mjs';
 
 /**
  * Console bootstrap. The shared engine (core.mjs) owns state + render; this
@@ -54,6 +56,19 @@ async function main() {
     addScreenBtn.disabled = false;
     addScreenBtn.title = 'Upload a screenshot to comment on';
     addScreenBtn.addEventListener('click', () => pickAndUploadScreen(ctx, store));
+  }
+
+  // Export (Phase 7) — gated to the OWNED live session. Lookback navigates to
+  // a sibling but the server still owns ITS session; sibling export is a
+  // follow-up (see http-server's handleExport). `listSessions` is the
+  // live-store marker (MemoryStore fixture doesn't expose it).
+  const exportBtn = document.getElementById('exportBtn');
+  if (exportBtn && !lookback && typeof store.listSessions === 'function') {
+    exportBtn.disabled = false;
+    exportBtn.title = 'Share this session as a single file or zipped bundle';
+    exportBtn.addEventListener('click', () => openExportChooser(exportBtn));
+  } else if (exportBtn && lookback) {
+    exportBtn.title = 'Switch to the live session to share';
   }
 
   // Re-render on any store mutation. With HttpStore this is also driven by SSE
@@ -188,6 +203,140 @@ async function setupSwitcher(ctx, store, lookback) {
 
   await fill();
   store.subscribe(() => { fill(); }); // refresh counts/live state on changes
+}
+
+/**
+ * Phase 7 export flow (revised 2026-05-28): a two-step chooser modal. Pick
+ * "Single HTML file" or "Bundle (zip)" → Next → the browser opens its native
+ * save dialog at the path the user picks. The server still writes a silent
+ * archive to `<sessionDir>/exports/` and `<sessionDir>/artifact-*-vN.html` on
+ * every export (project record); the user-facing flow only surfaces the
+ * save-as path so "Export" reads the same way it does in any other app.
+ */
+function openExportChooser(btn) {
+  closeExportDialog();
+
+  let kind = 'single'; // default
+
+  const option = (value, title, sub) => {
+    const node = el('label', { class: 'export-option', 'data-value': value }, [
+      el('input', { type: 'radio', name: 'dqa-export-kind', value, checked: value === kind ? true : null }),
+      el('div', { class: 'export-option-body' }, [
+        el('div', { class: 'export-option-title' }, title),
+        el('div', { class: 'export-option-sub' }, sub),
+      ]),
+    ]);
+    node.addEventListener('change', () => {
+      kind = node.querySelector('input').value;
+      dialog.querySelectorAll('.export-option').forEach((n) => n.classList.toggle('selected', n.dataset.value === kind));
+    });
+    if (value === kind) node.classList.add('selected');
+    return node;
+  };
+
+  const nextBtn = el('button', { class: 'btn primary', onclick: async () => {
+    nextBtn.disabled = true;
+    cancelBtn.disabled = true;
+    nextBtn.textContent = 'Sharing…';
+    try {
+      await runSaveDialog(kind);
+      closeExportDialog();
+    } catch (err) {
+      // AbortError from the picker is "user cancelled" — silent.
+      if (err?.name !== 'AbortError') showToast(`Share failed: ${err.message || err}`);
+      nextBtn.disabled = false;
+      cancelBtn.disabled = false;
+      nextBtn.textContent = 'Next';
+    }
+  } }, 'Next');
+  const cancelBtn = el('button', { class: 'btn', onclick: closeExportDialog }, 'Cancel');
+
+  const dialog = el('div', { class: 'export-dialog', role: 'dialog', 'aria-label': 'Share' }, [
+    el('div', { class: 'export-dialog-head' }, [
+      el('div', { class: 'export-dialog-title' }, 'Share'),
+      el('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: closeExportDialog }, '×'),
+    ]),
+    el('div', { class: 'export-options' }, [
+      option('single', 'Share as single file',
+        'One self-contained HTML artifact. Opens in any browser; engineer can filter, sort, and resolve comments.'),
+      option('bundle', 'Share as bundle (zip)',
+        'Zipped folder: artifact.html + session.json + screenshots. For checking into a repo or sharing inspectable source.'),
+    ]),
+    el('div', { class: 'export-dialog-foot' }, [cancelBtn, nextBtn]),
+  ]);
+
+  const backdrop = el('div', { class: 'export-backdrop', id: 'dqa-export-backdrop', onclick: (e) => {
+    if (e.target === backdrop) closeExportDialog();
+  } }, [dialog]);
+
+  document.body.appendChild(backdrop);
+  document.addEventListener('keydown', exportDialogKeydown);
+  // Focus the Next button so Enter confirms immediately.
+  nextBtn.focus();
+}
+
+/**
+ * Fetch the chosen export shape from the server and hand the bytes to the
+ * browser's native save dialog. `showSaveFilePicker` (Chromium-only) is the
+ * preferred path — it pops a real OS dialog and lets the user place the file
+ * exactly where they want. The fallback (`<a download>`) is a plain
+ * browser-download (goes to the user's Downloads folder) for Safari/Firefox.
+ */
+async function runSaveDialog(kind) {
+  const url = `/api/export?kind=${encodeURIComponent(kind)}`;
+  const res = await fetch(url, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error || `HTTP ${res.status}`);
+  }
+  const filename = filenameFromContentDisposition(res.headers.get('content-disposition')) || (kind === 'bundle' ? 'design-qa-export.zip' : 'design-qa-export.html');
+  const blob = await res.blob();
+
+  if (typeof window.showSaveFilePicker === 'function') {
+    const types = kind === 'bundle'
+      ? [{ description: 'Zip archive', accept: { 'application/zip': ['.zip'] } }]
+      : [{ description: 'HTML file', accept: { 'text/html': ['.html'] } }];
+    let handle;
+    try {
+      handle = await window.showSaveFilePicker({ suggestedName: filename, types });
+    } catch (err) {
+      // User cancelled the picker — propagate so the caller can stay silent.
+      throw err;
+    }
+    const writable = await handle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    showToast(`Saved ${handle.name}`);
+    return;
+  }
+
+  // Cross-browser fallback: trigger a normal download → user's default folder.
+  const objUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(objUrl), 4000);
+  showToast(`Downloaded ${filename}`);
+}
+
+/** Pull `filename="..."` out of a Content-Disposition header; null if absent. */
+function filenameFromContentDisposition(header) {
+  if (!header) return null;
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+function exportDialogKeydown(e) {
+  if (e.key === 'Escape') closeExportDialog();
+}
+
+function closeExportDialog() {
+  const node = document.getElementById('dqa-export-backdrop');
+  if (node) node.remove();
+  document.removeEventListener('keydown', exportDialogKeydown);
 }
 
 main().catch((err) => {

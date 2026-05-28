@@ -17,6 +17,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { timestampSlug } from '../lib/paths.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const CONSOLE_DIR = path.resolve(HERE, '..', 'console');
@@ -139,6 +140,86 @@ export async function buildArtifact({ sessionDir, session, outPath }) {
   const html = renderHtml(embedded, moduleImports, styles);
   await fs.writeFile(outPath, html, 'utf8');
   return outPath;
+}
+
+/** YYYYMMDD slug (no separators) — used to scope `vN` so re-exports on the
+ *  same day bump versions and a fresh day's exports start over. */
+function dateSlug(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+}
+
+/** Scan the session dir for `artifact-<date>-v<N>.html` siblings and return
+ *  the next free N (1 if none). Misses (ENOENT etc.) treated as empty. */
+async function nextVersion(sessionDir, date) {
+  const re = new RegExp(`^artifact-${date}-v(\\d+)\\.html$`);
+  let entries = [];
+  try { entries = await fs.readdir(sessionDir); } catch { /* empty dir */ }
+  let max = 0;
+  for (const name of entries) {
+    const m = re.exec(name);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return max + 1;
+}
+
+/**
+ * Higher-level export action (Phase 7). Produces a PAIR of outputs from one
+ * call so the engineer-handoff shape is documented even before the Playwright
+ * recording (Spike 8) lands:
+ *
+ *  1. A versioned self-contained file at
+ *     `<sessionDir>/artifact-YYYYMMDD-vN.html`, where `N` is the next free
+ *     integer for today's date. Same file shape as `buildArtifact()` — opens
+ *     from `file://`, no server needed.
+ *  2. A directory bundle at `<sessionDir>/exports/<YYYYMMDD-HHMMSS>-vN/`
+ *     containing `artifact.html` (the same self-contained build),
+ *     `session.json` (a fresh copy of the in-memory doc), `screenshots/`
+ *     (every file referenced from `session.json`), and a one-line README
+ *     noting the still-empty Playwright-script slot.
+ *
+ * Returns absolute paths so callers (HTTP endpoint, console UI) can show them
+ * to the user verbatim.
+ */
+export async function exportSession({ sessionDir, session }) {
+  const date = dateSlug();
+  const ts = timestampSlug();
+  const n = await nextVersion(sessionDir, date);
+  const versionedFile = path.join(sessionDir, `artifact-${date}-v${n}.html`);
+  const bundleDir = path.join(sessionDir, 'exports', `${ts}-v${n}`);
+
+  // 1. Versioned self-contained file. buildArtifact is idempotent: pass the
+  //    same session doc, get the same bytes (modulo `data:` URL ordering).
+  await buildArtifact({ sessionDir, session, outPath: versionedFile });
+
+  // 2. Directory bundle. `recursive: true` makes the parent `exports/` lazily.
+  await fs.mkdir(path.join(bundleDir, 'screenshots'), { recursive: true });
+  await fs.copyFile(versionedFile, path.join(bundleDir, 'artifact.html'));
+  await fs.writeFile(
+    path.join(bundleDir, 'session.json'),
+    JSON.stringify(session, null, 2),
+    'utf8',
+  );
+  // Copy every screenshot the session actually references. Missing files are
+  // logged (not fatal) so the bundle still ships if one shot is somehow gone.
+  for (const view of session.views || []) {
+    if (!view.screenshot) continue;
+    const from = path.join(sessionDir, view.screenshot);
+    const to = path.join(bundleDir, view.screenshot);
+    try {
+      await fs.mkdir(path.dirname(to), { recursive: true });
+      await fs.copyFile(from, to);
+    } catch (err) {
+      console.warn(`exportSession: skipped ${view.screenshot}:`, err.message);
+    }
+  }
+  await fs.writeFile(
+    path.join(bundleDir, 'README.md'),
+    'Design QA export. `artifact.html` opens standalone in any browser; the sibling files are here for inspection and a future Playwright-script slot (Spike 8) not yet written.\n',
+    'utf8',
+  );
+
+  return { versionedFile, bundleDir };
 }
 
 function renderHtml(session, moduleImports, styles) {

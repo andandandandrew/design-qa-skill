@@ -197,6 +197,27 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
   font-size: 17px; line-height: 1; padding: 0 6px; }
 .toast-close:hover { color: var(--text); }
 
+/* Export dialog (Phase 7): center-of-screen Figma-dark chooser. Pick a shape
+   (single file vs bundle.zip), Next → native OS save dialog. One open at a
+   time; backdrop click + Esc close. */
+.export-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 1100; }
+.export-dialog { background: var(--bg-2); border: 1px solid var(--border-strong);
+  border-radius: 8px; box-shadow: 0 16px 48px rgba(0,0,0,0.6);
+  min-width: 440px; max-width: 560px; padding: 14px 16px; color: var(--text); }
+.export-dialog-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.export-dialog-title { font-size: 13px; font-weight: 600; flex: 1; }
+.export-options { display: flex; flex-direction: column; gap: 8px; }
+.export-option { display: flex; gap: 12px; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 6px; cursor: pointer; background: var(--bg-3); align-items: flex-start; }
+.export-option:hover { border-color: var(--border-strong); }
+.export-option.selected { border-color: var(--accent); background: var(--accent-dim); }
+.export-option input[type="radio"] { margin-top: 3px; accent-color: var(--accent); }
+.export-option-body { display: flex; flex-direction: column; gap: 4px; }
+.export-option-title { font-size: 13px; font-weight: 600; }
+.export-option-sub { font-size: 12px; color: var(--text-2); line-height: 1.4; }
+.export-dialog-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--bg); }

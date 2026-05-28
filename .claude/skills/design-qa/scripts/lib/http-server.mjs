@@ -25,8 +25,10 @@ import http from 'node:http';
 import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { spawn } from 'node:child_process';
 import { sessionSubPaths } from './paths.mjs';
 import { SessionStore } from './session.mjs';
+import { exportSession } from '../artifact/build.mjs';
 
 const MIME = {
   '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript',
@@ -251,6 +253,80 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
     }
   }
 
+  /**
+   * Phase 7: build a versioned self-contained artifact + a sibling directory
+   * bundle under `<sessionDir>/exports/` (silent project archive), AND stream
+   * the requested shape back to the browser so the user can drop it anywhere
+   * via the native save dialog.
+   *
+   *   ?kind=single → text/html  + Content-Disposition = artifact-YYYYMMDD-vN.html
+   *   ?kind=bundle → application/zip + Content-Disposition = artifact-YYYYMMDD-vN.zip
+   *                 (the bundle dir, zipped on the fly via the OS `zip` cmd)
+   *
+   * Gated to the OWNED session this pass — sibling export is a follow-up.
+   */
+  async function handleExport(req, res) {
+    const q = new URLSearchParams((req.url || '').split('?')[1] || '');
+    const kind = q.get('kind');
+    if (kind !== 'single' && kind !== 'bundle') {
+      return sendJson(res, 400, { ok: false, error: 'kind must be single|bundle' });
+    }
+    try {
+      const { versionedFile, bundleDir } = await exportSession({
+        sessionDir, session: store.doc,
+      });
+      // Both shapes derive a recognizable filename from the versioned file (the
+      // bundle dir's `<HHMMSS>-vN` name is timestamp-y; users want to see the
+      // session date + vN, which matches `artifact-YYYYMMDD-vN.*`).
+      const baseName = path.basename(versionedFile, '.html'); // artifact-YYYYMMDD-vN
+
+      if (kind === 'single') {
+        const html = await fsp.readFile(versionedFile);
+        res.writeHead(200, {
+          'content-type': 'text/html; charset=utf-8',
+          'content-length': html.length,
+          'content-disposition': `attachment; filename="${baseName}.html"`,
+        });
+        return void res.end(html);
+      }
+
+      // kind === 'bundle' → zip the bundle dir to a buffer using the OS `zip`
+      // command (Info-ZIP, present on macOS + Linux). Writing to stdout (`-`)
+      // means no temp .zip on disk; running with cwd=bundleDir gives the zip
+      // clean relative paths (`./artifact.html` etc.) rather than the abs path.
+      const zipBuf = await zipDirToBuffer(bundleDir);
+      res.writeHead(200, {
+        'content-type': 'application/zip',
+        'content-length': zipBuf.length,
+        'content-disposition': `attachment; filename="${baseName}.zip"`,
+      });
+      return void res.end(zipBuf);
+    } catch (err) {
+      return sendJson(res, 500, { ok: false, error: String(err?.message || err) });
+    }
+  }
+
+  function zipDirToBuffer(srcDir) {
+    return new Promise((resolve, reject) => {
+      // `-r` recursive, `-X` strips macOS extended attributes (smaller +
+      // reproducible), `-q` silences progress, `-` writes to stdout, `.` says
+      // zip everything under cwd.
+      const proc = spawn('zip', ['-r', '-X', '-q', '-', '.'], { cwd: srcDir });
+      const chunks = [];
+      const errs = [];
+      proc.stdout.on('data', (c) => chunks.push(c));
+      proc.stderr.on('data', (c) => errs.push(c));
+      proc.on('error', reject);
+      proc.on('close', (code) => {
+        if (code !== 0) {
+          reject(new Error(`zip exited ${code}: ${Buffer.concat(errs).toString('utf8').trim()}`));
+        } else {
+          resolve(Buffer.concat(chunks));
+        }
+      });
+    });
+  }
+
   function handleEvents(req, res) {
     res.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -272,6 +348,7 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
 
       if (req.method === 'POST' && url === '/api/mutate') return void handleMutate(req, res);
       if (req.method === 'POST' && url === '/api/upload') return void handleUpload(req, res);
+      if (req.method === 'POST' && url === '/api/export') return void handleExport(req, res);
       if (req.method === 'GET' && url === '/api/session') {
         // Phase 6: optional `?id=<basename>` returns a sibling session's doc
         // read-only. The current server stays the sole writer of its OWN
