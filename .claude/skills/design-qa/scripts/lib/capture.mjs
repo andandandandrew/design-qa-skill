@@ -28,6 +28,11 @@ export async function attachCapture(store, {
   // Spike 8: project-configurable redaction patterns from design-qa.config.json.
   // Additive to the built-in defaults in lib/redact.mjs. Empty array → defaults only.
   redactionPatterns = [],
+  // Test affordances — production always defaults to headed Chromium with the
+  // overlay injected. The e2e test under __tests__/ flips both to drive the
+  // routing logic in isolation without a real reviewer in the loop.
+  headless = false,
+  injectOverlay = true,
 }) {
   // Per-page tracked state: the most recently observed main-frame URL.
   const pageUrls = new WeakMap();
@@ -85,11 +90,11 @@ export async function attachCapture(store, {
   // Launch Chromium with a per-session persistent profile so logins survive.
   await fsp.mkdir(browserProfile, { recursive: true });
   const context = await chromium.launchPersistentContext(browserProfile, {
-    headless: false,
-    viewport: null, // use window size
+    headless,
+    viewport: headless ? { width: 1280, height: 800 } : null,
     args: ['--no-first-run', '--no-default-browser-check'],
   });
-  log('chromium launched');
+  log(`chromium launched (headless=${headless})`);
 
   // ---------- Spike 8 — interaction recorder ----------
   //
@@ -197,15 +202,20 @@ export async function attachCapture(store, {
     redactor,
     onEvent: onRecorderEvent,
     onUpdate: onRecorderUpdate,
-    headless: false,
+    headless,
   });
   log(`recorder attached (redaction defaults + ${redactionPatterns.length} extra pattern(s))`);
   // ---------- end Spike 8 setup ----------
 
   // Inject overlay into every page. addInitScript applies to future
   // navigations; we'll separately inject into already-open pages below.
-  await context.addInitScript({ path: overlayInjectPath });
-  const overlayScript = await fsp.readFile(overlayInjectPath, 'utf8');
+  // Skipped in headless test mode — tests call the bindings directly via
+  // page.evaluate(window.__designQA_*) without the overlay UI.
+  let overlayScript = '';
+  if (injectOverlay) {
+    await context.addInitScript({ path: overlayInjectPath });
+    overlayScript = await fsp.readFile(overlayInjectPath, 'utf8');
+  }
 
   // Browser-callable API. exposeBinding gives us the source `page` for free,
   // which we need so screenshots target the right tab.
@@ -405,8 +415,10 @@ export async function attachCapture(store, {
     attachPage(page);
     // Already-open pages (e.g. the default tab from launchPersistentContext)
     // missed addInitScript; inject the overlay directly into them.
-    try { await page.addScriptTag({ content: overlayScript }); } catch (err) {
-      console.warn('capture: initial overlay inject failed:', err.message);
+    if (injectOverlay) {
+      try { await page.addScriptTag({ content: overlayScript }); } catch (err) {
+        console.warn('capture: initial overlay inject failed:', err.message);
+      }
     }
   }
 
@@ -415,6 +427,10 @@ export async function attachCapture(store, {
   }
 
   return {
+    /** Test affordance — production callers never read this. Exposes the live
+     *  BrowserContext so the e2e test can drive a page without re-attaching to
+     *  the locked browser-profile dir. Harmless in production. */
+    contextForTests: context,
     /**
      * Seal every unsealed view that has pins — the `end` flow AND the
      * browser-close flow. Iterates the STORE (not live pages) so it still seals
