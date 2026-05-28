@@ -136,6 +136,12 @@ export class SessionStore {
     // SSE transport in Phase 4) sees all changes regardless of source.
     this._listeners = new Set();
     this._seq = 0;
+    // Serial write chain. Concurrent persist() calls queue here so we never
+    // race two writers on the same `session.json.tmp` — atomic temp+rename
+    // is only atomic per-write, not across overlapping writes. Pre-Spike-8
+    // the mutation rate was low (one per pin drop), so the race never fired;
+    // 9b's recorder can produce N writes per keystroke and exposes the bug.
+    this._writeChain = Promise.resolve();
   }
 
   static async load(sessionDir) {
@@ -152,6 +158,16 @@ export class SessionStore {
   }
 
   async persist() {
+    // Enqueue this write after any in-flight one. Each caller awaits its OWN
+    // write's outcome; a failure in a prior link doesn't poison the chain
+    // (later writes still run) but DOES still surface to that caller's awaiter.
+    const prior = this._writeChain;
+    const myWrite = prior.then(() => this._doPersist(), () => this._doPersist());
+    this._writeChain = myWrite.catch(() => {});
+    return myWrite;
+  }
+
+  async _doPersist() {
     await writeSession(this.sessionDir, this.doc);
     const seq = ++this._seq;
     for (const fn of [...this._listeners]) {

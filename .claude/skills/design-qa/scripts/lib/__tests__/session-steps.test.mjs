@@ -201,3 +201,33 @@ test('setRecordingStartAt: empty case is a no-op (no steps anywhere)', async () 
     assert.equal(store.doc.views[0].steps.length, 0);
   } finally { await cleanup(dir); }
 });
+
+test('persist(): concurrent writes serialize (no ENOENT on shared tmp)', async () => {
+  // Regression: pre-fix, 9b's recorder could fire N rapid persist() calls; two
+  // overlapping writes raced on `session.json.tmp` and the loser ENOENT'd on
+  // its own (already-renamed-away) tmp file. Fix is a serial write chain.
+  // This test schedules 50 appendPreconditionStep calls concurrently and
+  // asserts every one lands on disk in order.
+  const { store, dir } = await newStore();
+  try {
+    const N = 50;
+    const promises = [];
+    for (let i = 0; i < N; i++) {
+      promises.push(store.appendPreconditionStep({
+        kind: 'click', selector: 'sel', t: i, pageUrl: 'u',
+        code: `// step ${i}`,
+      }));
+    }
+    const results = await Promise.all(promises);
+    assert.equal(results.length, N);
+    assert.equal(store.doc.preconditionSteps.length, N);
+    // On-disk content matches in-memory.
+    const fresh = await SessionStore.load(dir);
+    assert.equal(fresh.doc.preconditionSteps.length, N);
+    // Insertion order preserved (each persist's _doPersist saw a complete
+    // doc snapshot — the chain serializes between mutations as well).
+    for (let i = 0; i < N; i++) {
+      assert.equal(fresh.doc.preconditionSteps[i].t, i);
+    }
+  } finally { await cleanup(dir); }
+});
