@@ -647,7 +647,9 @@ my-session.zip
 
 `recording.spec.ts` is one Playwright `test()` per session (not per view —
 the whole path is one reproducible scenario). View boundaries become `//
---- view: <name> ---` comments.
+--- view: <name> ---` comments. **(SUPERSEDED 2026-05-28 — see §15.1: the
+file now carries one `test()` per *annotated* screen, each the cumulative
+path to that screen's feedback; the last test is the whole-session path.)**
 
 `recording-steps.md` is the same content the console "View steps" popover
 shows, plus the precondition block.
@@ -962,6 +964,22 @@ disclosure renders + edit/omit/undo all work) plus the user's in-browser pass.
 
 ### Phase 9e — Bundle emitters
 
+> **SHIPPED 2026-05-28.** `scripts/lib/emit-steps.mjs` (pure, mirror of
+> `emit-spec.mjs`) emits `recording-steps.md` — precondition + per-view
+> `### <name>` sections, the same `humanText`→`describeAction` text the console
+> popover shows, omitted steps skipped silently, plus a credentials note
+> listing the `DESIGN_QA_FIELD_*` env vars. `exportSession()` now writes BOTH
+> `recording.spec.ts` (from `emitRecordingSpec`) and `recording-steps.md` into
+> the silent `<sessionDir>/exports/<ts>-vN/` archive; the on-the-fly zip picks
+> them up unchanged. README flipped (Spike-8 slot is no longer "future"), and
+> the Share chooser sub-text now reads "(No replay script.)" / "+ replay
+> script." 7 unit tests in `emit-steps.test.mjs` (suite 46/46). Verified
+> headless: a 2-view session with one omitted + one redacted step exported,
+> both files present, omitted step absent, env-ref present, zip contains both.
+> NOT run through a live `npx playwright test` — `@playwright/test` isn't a
+> project dep (only `playwright` for the recorder), so that stays a future
+> check if a real fixture run is wanted.
+
 Two file writes in `exportSession()`. Smallest phase.
 
 **Lands:**
@@ -994,6 +1012,103 @@ assert it passes.
 - **Bumping Playwright off 1.60.0** is its own task post-9e.
 - **DOM `input.type` query at fill-time** is a future hardening only — open
   it if a real false-negative happens in practice.
+
+---
+
+## 15. Recording-model refinement (design conversation 2026-05-28, post-9e)
+
+After 9e shipped, a design conversation surfaced two refinements to the
+recording model. **These supersede the "one `test()` per session" statement in
+§8 and the 9e emit description in §14.** Decisions are settled; implementation
+is the next code phase (plan below). Not yet built.
+
+### 15.1 Per-screen forensic specs (cumulative checkpoints)
+
+The Playwright spec is **forensic**: its job is to get an engineer back to the
+exact point where a piece of feedback was laid in. In a recorded review the
+reviewer annotates *multiple* screens, each at a different stage of the path —
+so each annotated screen wants its own replay, and those replays differ by
+*where they stop*.
+
+The recorded path is **cumulative** and each annotated screen is a **checkpoint**
+on it. The replay "to screen N" is the path from the start truncated at the end
+of screen N's segment. The checkpoints are *nested*, not independent:
+
+- Screen 1 (Login) → steps to reach Login.
+- Screen 2 (Dashboard) → Login steps **+** Dashboard steps.
+- Screen 3 (Settings) → Login **+** Dashboard **+** Settings steps.
+
+**Packaging (DECIDED):** ONE `recording.spec.ts`, with **one `test()` per
+annotated screen**, each replaying the cumulative path up to that screen's
+feedback:
+
+```ts
+test('Reach feedback on: Login',     async ({ page }) => { /* path → Login */ });
+test('Reach feedback on: Dashboard', async ({ page }) => { /* path → Login → Dashboard */ });
+test('Reach feedback on: Settings',  async ({ page }) => { /* full path */ });
+```
+
+- The engineer reviewing a Dashboard comment runs that one test and lands
+  exactly where the comment lives.
+- The **last** test *is* the whole-session path, so the monolithic view isn't
+  lost — no separate session-level test needed.
+- Only **annotated** screens (≥1 pin) get a `test()`. Pass-through / steps-only
+  screens remain *intermediate steps inside* each cumulative path; they have no
+  feedback to land on, so no test of their own.
+- `recording-steps.md` mirrors this: its per-screen sections are documented as
+  checkpoints on the cumulative path.
+- The console/artifact **Preview spec** scopes to *that screen's* checkpoint
+  test, not the whole session.
+- Redaction is per-step and already applied, so cumulative prefixes inherit it;
+  the env-var header lists the union across all tests.
+
+### 15.2 "Done" = session-level wrap-up; Stop reconciliation
+
+Per-screen forensic specs only work if recording **spans every screen** — so
+the "I'm done" gesture must be **session-level**, not per-screen, or the
+cumulative path would die after screen 1.
+
+- **Moving between screens** = navigation (or "New"). Auto-seals the current
+  screen, **recording keeps running**. This is the natural note-taking flow.
+- **Done** (relabelled from "Save") = session-level wrap-up: seal the current
+  screen + **finalize-keep** the recording + stop. Pressed once, at the end.
+
+Verb bar reads: *Comment* (annotate) · *New/navigate* (next screen, still
+recording) · *Done* (finished — commit + lock the recording).
+
+**Stop semantics reconciliation (DECIDED):** "stop recording" must mean
+**finalize-and-keep the recorded path** (lock `view.steps`, stop appending),
+NOT today's `__designQA_stopRecording` behavior of dumping every step back into
+`preconditionSteps[]` (which empties the RECORDED PATH block). A true throw-away
+becomes a **separate, explicitly-labelled "Discard recording"** action. The
+popover's current "Stop recording" gets reconciled to the finalize-keep
+meaning. ("I stopped recording" ≠ "throw away what I recorded.")
+
+### 15.3 Screenshots — reaffirmed, no change
+
+The skill documents **feedback that requires change, statically and visually**.
+So: pages **with** comments are screenshotted (already works, both modes);
+pages only **passed through** are not — their value is the `.spec.ts`, which
+records continuously. Capturing every page visually is the **flow-capture**
+future (QA-ing a workflow), turned on then, not now. (Minor: passed-through
+screens still appear as blank-canvas entries during recording to carry their
+steps; hiding them from the visual list while still feeding the script is
+optional polish, not scoped here.)
+
+### 15.4 Phased plan (next code phase — NOT yet built)
+
+- **Phase 9f — Done + recording lifecycle.** Relabel Save → **Done** in the
+  capture overlay verb bar; Done seals the current screen + finalizes-keeps the
+  recording + stops (session-level). Reconcile `__designQA_stopRecording` /
+  popover "Stop" to finalize-keep semantics. Add an explicit **Discard
+  recording** action (the old dump-to-preconditions behavior, relabelled).
+  High-blast-radius: live capture path (`lib/capture.mjs`) + overlay
+  (`overlay/inject.js`). Needs in-browser verification.
+- **Phase 9g — Per-screen cumulative spec emission.** `lib/emit-spec.mjs`:
+  emit one `test()` per annotated screen, each the cumulative prefix to that
+  screen; last test = full path. Mirror the checkpoint framing in
+  `lib/emit-steps.mjs`. Scope the console/artifact Preview-spec modal to the
+  per-screen checkpoint. Pure-emitter work + UI wiring; unit-testable like 9d/9e.
 
 ---
 
