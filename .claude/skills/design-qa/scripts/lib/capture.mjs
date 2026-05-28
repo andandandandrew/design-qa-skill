@@ -18,6 +18,7 @@ import { chromium } from 'playwright';
 import { newId } from './session.mjs';
 import { attachRecorder } from './recorder.mjs';
 import { createRedactor } from './redact.mjs';
+import { describeAction } from './recorder-format.mjs';
 
 export async function attachCapture(store, {
   sessionDir,
@@ -198,13 +199,64 @@ export async function attachCapture(store, {
     }
   }
 
+  // -- Node → shadow recorder-state push (per design doc §6 Binding mechanism)
+  //
+  // The overlay's verb-bar chip + Recording popover read state via a global
+  // setter the overlay registers on `window`. We page.evaluate that setter on
+  // every state change (mark/stop/event), coalesced/throttled to ≤5/sec so
+  // fast typing doesn't drown the IPC channel. The full step list is NOT
+  // pushed — that's pulled on popover open via __designQA_fetchRecorderSteps.
+  function currentRecorderState() {
+    const startedAtMs = store.doc.recordingStartAt;
+    const active = startedAtMs != null;
+    let count = 0;
+    if (active) {
+      for (const v of store.doc.views) count += Array.isArray(v.steps) ? v.steps.length : 0;
+    }
+    return { active, count, startedAtMs, redactionCount: redactor.count };
+  }
+
+  let pendingPush = null;
+  function schedulePushRecorderState() {
+    if (pendingPush) { pendingPush.state = currentRecorderState(); return; }
+    pendingPush = { state: currentRecorderState() };
+    setTimeout(async () => {
+      const { state } = pendingPush;
+      pendingPush = null;
+      for (const page of context.pages()) {
+        try {
+          await page.evaluate((s) => {
+            if (typeof window.__designQA_setRecorderState === 'function') {
+              window.__designQA_setRecorderState(s);
+            }
+          }, state);
+        } catch { /* page mid-nav or closed — next event re-pushes */ }
+      }
+    }, 200);
+  }
+
+  // Wrap the recorder sinks so EVERY event triggers a state push (count
+  // changes, redactionCount may change). Wrapping here keeps onRecorderEvent
+  // pure of UI concerns.
+  const _origOnEvent = onRecorderEvent;
+  const _origOnUpdate = onRecorderUpdate;
+  async function onRecorderEventWithPush(ev) {
+    await _origOnEvent(ev);
+    schedulePushRecorderState();
+  }
+  async function onRecorderUpdateWithPush(ev, prev) {
+    await _origOnUpdate(ev, prev);
+    schedulePushRecorderState();
+  }
+
   const recorder = await attachRecorder(context, {
     redactor,
-    onEvent: onRecorderEvent,
-    onUpdate: onRecorderUpdate,
+    onEvent: onRecorderEventWithPush,
+    onUpdate: onRecorderUpdateWithPush,
     headless,
   });
   log(`recorder attached (redaction defaults + ${redactionPatterns.length} extra pattern(s))`);
+  schedulePushRecorderState();    // initial state push to any already-open pages
   // ---------- end Spike 8 setup ----------
 
   // Inject overlay into every page. addInitScript applies to future
@@ -257,7 +309,51 @@ export async function attachCapture(store, {
     segmentBuffer.clear();
     await store.setRecordingStartAt(ts);
     log(`mark-start at ${ts}`);
+    schedulePushRecorderState();
     return { ok: true, recordingStartAt: ts };
+  });
+
+  // Spike 8: Stop recording — turn off the recorded-path emitter without
+  // closing the recorder. Moves every existing view.steps[] entry back into
+  // preconditionSteps[] (chronological) and clears recordingStartAt. The
+  // popover's [Stop recording] button calls this; re-pressing Mark-start
+  // begins a fresh boundary.
+  await context.exposeBinding('__designQA_stopRecording', async () => {
+    await store.stopRecording();
+    log('stop-recording');
+    schedulePushRecorderState();
+    return { ok: true };
+  });
+
+  // Spike 8: pulled by the Recording popover on open. Returns the most recent
+  // N steps with humanText pre-computed (so the shadow doesn't need a copy of
+  // describeAction) plus the preconditionSteps count for the sub-line. The
+  // full step list lives in session.json; this is for the live in-page UI.
+  const POPOVER_STEP_CAP = 100;
+  await context.exposeBinding('__designQA_fetchRecorderSteps', async () => {
+    const all = [];
+    for (const v of store.doc.views) {
+      if (!Array.isArray(v.steps)) continue;
+      for (const s of v.steps) all.push(s);
+    }
+    all.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+    const recent = all.slice(-POPOVER_STEP_CAP);
+    const steps = recent.map((s) => ({
+      id: s.id,
+      kind: s.kind,
+      // describeAction expects an `action`-shaped object; our persisted step
+      // already carries the same fields under a different top-level key name
+      // (kind → name). Adapt locally so the formatter stays pure.
+      humanText: describeAction({
+        name: s.kind, selector: s.selector, text: s.text,
+        url: s.url, key: s.key, options: s.options,
+      }),
+    }));
+    return {
+      steps,
+      preconditionCount: (store.doc.preconditionSteps || []).length,
+      redactionCount: redactor.count,
+    };
   });
 
   await context.exposeBinding('__designQA_createPin', async ({ page }, { viewId, x, y, note }) => {

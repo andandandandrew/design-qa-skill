@@ -36,6 +36,11 @@
     inspectorExpanded: false,
     selectedInspectorViewId: null,
     session: { sessionName: '', activeViewId: null, views: [] },
+    // Spike 8: recorder state pushed from Node via window.__designQA_setRecorderState.
+    // `active` flips when Mark-start fires; `count` is total post-Mark-start steps
+    // across all views; `startedAtMs` is the Node-side wall clock at Mark-start
+    // (popover computes elapsed from it).
+    recorder: { active: false, count: 0, startedAtMs: null, redactionCount: 0 },
   };
 
   const TEMP_PREFIX = '__temp_';
@@ -322,6 +327,91 @@
     .modal button.primary { background: var(--accent); color: #ffffff; font-weight: 600; }
     .modal button.primary:hover { background: var(--accent-hover); }
 
+    /* Spike 8 — Recording chip + popover */
+    .tool-btn.recorder-chip.active {
+      background: rgba(242, 72, 34, 0.16);
+      color: #ff4f33;
+    }
+    .tool-btn.recorder-chip.active:hover {
+      background: rgba(242, 72, 34, 0.25);
+    }
+    .tool-btn.recorder-chip .rec-dot {
+      width: 8px; height: 8px; border-radius: 999px; background: #ff4f33;
+      flex-shrink: 0; display: inline-block;
+      animation: rec-pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes rec-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.45; }
+    }
+    .rec-popover {
+      position: fixed; right: 12px; width: 320px;
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      pointer-events: auto; overflow: hidden;
+      font-size: 12px;
+    }
+    .rec-popover-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 12px; border-bottom: 1px solid var(--border);
+    }
+    .rec-popover-title { font-weight: 600; color: var(--text); font-size: 12px; }
+    .rec-popover-close {
+      all: unset; cursor: pointer; color: var(--text-2);
+      width: 22px; height: 22px; border-radius: 4px;
+      display: inline-flex; align-items: center; justify-content: center;
+    }
+    .rec-popover-close:hover { background: var(--bg-3); color: var(--text); }
+    .rec-popover-close svg { width: 12px; height: 12px; }
+    .rec-popover-meta {
+      padding: 8px 12px; color: var(--text-2); font-size: 11px;
+      border-bottom: 1px solid var(--border); line-height: 1.5;
+    }
+    .rec-popover-meta b { color: var(--text); font-weight: 600; }
+    .rec-redact-chip {
+      display: inline-block; margin-left: 6px;
+      padding: 1px 6px; border-radius: 999px; font-size: 10px;
+      background: rgba(13, 153, 255, 0.16); color: var(--accent);
+      font-family: 'JetBrains Mono', monospace; font-weight: 600;
+    }
+    .rec-popover-list {
+      max-height: 240px; overflow-y: auto;
+      padding: 6px 0;
+    }
+    .rec-popover-list-empty {
+      padding: 14px; text-align: center; color: var(--text-3); font-size: 11px;
+    }
+    .rec-step {
+      padding: 5px 12px; color: var(--text); font-size: 11px;
+      display: flex; gap: 8px; line-height: 1.45;
+    }
+    .rec-step + .rec-step { border-top: 1px solid rgba(255,255,255,0.04); }
+    .rec-step:hover { background: var(--bg-3); }
+    .rec-step .rec-step-n {
+      flex-shrink: 0; color: var(--text-3);
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-size: 10px; width: 22px; text-align: right;
+    }
+    .rec-step .rec-step-text { flex: 1; word-break: break-word; }
+    .rec-step .rec-step-text code {
+      background: var(--bg-3); padding: 0 4px; border-radius: 3px;
+      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-size: 10px;
+    }
+    .rec-step .rec-step-text strong { color: var(--text); font-weight: 600; }
+    .rec-popover-actions {
+      display: flex; justify-content: space-between; gap: 6px;
+      padding: 8px 12px; border-top: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .rec-popover-actions button {
+      all: unset; cursor: pointer; font-size: 11px; font-weight: 500;
+      padding: 5px 10px; border-radius: 4px;
+    }
+    .rec-popover-actions button.ghost { color: var(--text-2); }
+    .rec-popover-actions button.ghost:hover { color: var(--text); background: var(--bg-3); }
+    .rec-popover-actions button.danger { color: var(--danger); }
+    .rec-popover-actions button.danger:hover { background: rgba(242,72,34,0.1); }
+
     /* Toast */
     .toast-layer {
       position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
@@ -359,6 +449,7 @@
   const ICON_CHEVRON_UP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>`;
   const ICON_CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
   const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+  const ICON_REC = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>`;
 
   // addBtn label content (icon + word); swapped to a Cancel state in placement mode.
   const ADD_LABEL = `<span class="tb-ic">${ICON_COMMENT}</span><span class="tb-label">Comment</span>`;
@@ -371,6 +462,7 @@
       <button class="tool-btn" id="addBtn" title="Click, then click on the page to drop a comment">${ADD_LABEL}</button>
       <button class="tool-btn" id="saveViewBtn" title="Save this screen — lock it here; finish edits in the console"><span class="tb-ic">${ICON_CHECK}</span><span class="tb-label">Save</span></button>
       <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span><span class="tb-label">New</span></button>
+      <button class="tool-btn recorder-chip" id="recBtn" title="Mark the start of the recording the engineer will replay"><span class="tb-ic">${ICON_REC}</span><span class="tb-label">Mark start</span></button>
       <button class="icon-btn" id="toggleBtn" title="Show screens & pins">${ICON_CHEVRON_DOWN}</button>
     </div>
     <div class="confirm-bar" id="confirmBar" hidden>
@@ -991,6 +1083,186 @@
     else toast('Nothing to save on this screen');
   }
 
+  // ------- Spike 8 — Recording chip + popover --------------------------
+
+  // Re-render the verb-bar chip from STATE.recorder. Called whenever the
+  // Node-side setter pushes new state; cheap, ~constant time.
+  function renderRecorderChip() {
+    const btn = $('recBtn');
+    if (!btn) return;
+    const r = STATE.recorder;
+    if (r.active) {
+      btn.classList.add('active');
+      btn.innerHTML = `<span class="rec-dot"></span><span class="tb-label">Recording · ${r.count}</span>`;
+      btn.title = 'Open recording details';
+    } else {
+      btn.classList.remove('active');
+      btn.innerHTML = `<span class="tb-ic">${ICON_REC}</span><span class="tb-label">Mark start</span>`;
+      btn.title = 'Mark the start of the recording the engineer will replay';
+    }
+  }
+
+  // Popover state: a single transient element in `chrome`; null when closed.
+  let recPopoverEl = null;
+  let recStopwatchTimer = null;
+
+  function formatElapsed(ms) {
+    if (!ms || ms < 0) return '0:00';
+    const s = Math.floor(ms / 1000);
+    const m = Math.floor(s / 60);
+    return `${m}:${String(s % 60).padStart(2, '0')}`;
+  }
+
+  /** Strip the markdown bold + backtick used in describeAction so the inline
+   *  popover renders without a markdown parser. Code spans become <code>,
+   *  bold becomes <strong>. */
+  function renderInlineMd(text) {
+    const escaped = escapeHtml(text);
+    return escaped
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  }
+
+  function renderRecPopoverMeta() {
+    if (!recPopoverEl) return;
+    const r = STATE.recorder;
+    const meta = recPopoverEl.querySelector('.rec-popover-meta');
+    if (!meta) return;
+    const elapsedText = r.startedAtMs
+      ? `Started ${formatElapsed(Date.now() - r.startedAtMs)} ago`
+      : 'Not recording';
+    const redactChip = r.redactionCount > 0
+      ? ` <span class="rec-redact-chip" title="${r.redactionCount} value(s) redacted from captured fields">${r.redactionCount} redacted</span>`
+      : '';
+    meta.innerHTML =
+      `${elapsedText} · <b>${r.count}</b> step${r.count === 1 ? '' : 's'} captured${redactChip}`;
+  }
+
+  function renderRecPopoverList(payload) {
+    if (!recPopoverEl) return;
+    const list = recPopoverEl.querySelector('.rec-popover-list');
+    if (!list) return;
+    if (!payload || !payload.steps || payload.steps.length === 0) {
+      list.innerHTML = '<div class="rec-popover-list-empty">No steps yet on the recorded path.</div>';
+      return;
+    }
+    const startNum = Math.max(1, payload.steps.length - 99);
+    list.innerHTML = payload.steps
+      .map((s, i) => `<div class="rec-step"><span class="rec-step-n">${startNum + i}.</span><span class="rec-step-text">${renderInlineMd(s.humanText || '')}</span></div>`)
+      .join('');
+    // Scroll to the latest step.
+    list.scrollTop = list.scrollHeight;
+  }
+
+  async function refreshRecPopoverList() {
+    if (!recPopoverEl) return;
+    try {
+      const payload = await window.__designQA_fetchRecorderSteps();
+      renderRecPopoverList(payload);
+    } catch (err) {
+      console.warn('design-qa: fetchRecorderSteps failed', err);
+    }
+  }
+
+  function positionRecPopover() {
+    if (!recPopoverEl) return;
+    const top = panel.getBoundingClientRect().bottom + 6;
+    recPopoverEl.style.top = `${top}px`;
+  }
+
+  function openRecordingPopover() {
+    if (recPopoverEl) return;
+    recPopoverEl = document.createElement('div');
+    recPopoverEl.className = 'rec-popover';
+    recPopoverEl.innerHTML = `
+      <div class="rec-popover-header">
+        <div class="rec-popover-title">Recording</div>
+        <button class="rec-popover-close" id="recPopoverCloseBtn" title="Close">${ICON_X}</button>
+      </div>
+      <div class="rec-popover-meta">Loading…</div>
+      <div class="rec-popover-list"><div class="rec-popover-list-empty">Loading…</div></div>
+      <div class="rec-popover-actions">
+        <button class="ghost" id="recResetBtn" title="Move the start of recording to now">Reset start here</button>
+        <button class="danger" id="recStopBtn" title="Turn recording off; existing steps move to preconditions">Stop recording</button>
+      </div>
+    `;
+    chrome.appendChild(recPopoverEl);
+    positionRecPopover();
+    renderRecPopoverMeta();
+    refreshRecPopoverList();
+
+    // Stopwatch tick — only while popover is open AND active.
+    if (recStopwatchTimer) clearInterval(recStopwatchTimer);
+    recStopwatchTimer = setInterval(() => {
+      if (!recPopoverEl) return;
+      if (!STATE.recorder.active) return;
+      renderRecPopoverMeta();
+    }, 1000);
+  }
+
+  function closeRecordingPopover() {
+    if (!recPopoverEl) return;
+    recPopoverEl.remove();
+    recPopoverEl = null;
+    if (recStopwatchTimer) { clearInterval(recStopwatchTimer); recStopwatchTimer = null; }
+  }
+
+  // Node → shadow push setter, called via page.evaluate from capture.mjs.
+  // Defensive: state may be partial; merge into the current STATE.recorder.
+  window.__designQA_setRecorderState = (state) => {
+    if (!state || typeof state !== 'object') return;
+    STATE.recorder = {
+      active: !!state.active,
+      count: Number.isFinite(state.count) ? state.count : 0,
+      startedAtMs: typeof state.startedAtMs === 'number' ? state.startedAtMs : null,
+      redactionCount: Number.isFinite(state.redactionCount) ? state.redactionCount : 0,
+    };
+    renderRecorderChip();
+    if (recPopoverEl) {
+      renderRecPopoverMeta();
+      // Re-fetch list — count changed means a new step may have landed.
+      refreshRecPopoverList();
+      // Active flipped to false? Close the popover (nothing to show).
+      if (!STATE.recorder.active) closeRecordingPopover();
+    }
+  };
+
+  // Chip click: resting → call Mark-start binding; active → toggle popover.
+  async function onRecChipClick() {
+    if (STATE.recorder.active) {
+      if (recPopoverEl) closeRecordingPopover();
+      else openRecordingPopover();
+      return;
+    }
+    try { await window.__designQA_markStart(); }
+    catch (err) { console.warn('design-qa: markStart failed', err); }
+    // The state push from Node will flip the chip; no manual update needed.
+  }
+
+  async function onRecPopoverClick(e) {
+    const btn = e.target?.closest?.('button');
+    if (!btn) return;
+    const id = btn.id;
+    if (id === 'recPopoverCloseBtn') { closeRecordingPopover(); return; }
+    if (id === 'recResetBtn') {
+      try { await window.__designQA_markStart(); }
+      catch (err) { console.warn('design-qa: markStart (reset) failed', err); }
+      return;
+    }
+    if (id === 'recStopBtn') {
+      try { await window.__designQA_stopRecording(); }
+      catch (err) { console.warn('design-qa: stopRecording failed', err); }
+      // The push handler closes the popover when active flips false.
+      return;
+    }
+  }
+
+  // Keep the popover anchored to the panel as the panel resizes/expands.
+  const recReposObs = new ResizeObserver(() => positionRecPopover());
+  recReposObs.observe(panel);
+
+  // ------- end Spike 8 popover ----------------------------------------
+
   function focusPinFromInspector(pinId, viewId) {
     if (viewId === STATE.viewId) {
       const pin = STATE.pins.find((p) => p.id === pinId);
@@ -1150,6 +1422,13 @@
     if (id === 'saveCancelBtn') { setSaveConfirm(false); return; }
     if (id === 'saveConfirmBtn') { performSaveCurrentScreen(); return; }
     if (id === 'newViewBtn') { setSaveConfirm(false); startNewScreenHere(); return; }
+    if (id === 'recBtn') { onRecChipClick(); return; }
+  });
+
+  // The recording popover sits in `chrome` (sibling of panel), so panel's
+  // delegation doesn't reach it. Wire its own listener.
+  chrome.addEventListener('click', (e) => {
+    if (recPopoverEl && recPopoverEl.contains(e.target)) onRecPopoverClick(e);
   });
 
   // ------- Boot ---------------------------------------------------------

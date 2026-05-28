@@ -473,6 +473,25 @@ export class SessionStore {
   }
 
   /**
+   * Turn the recorded-path emitter OFF. Clears `recordingStartAt`, moves
+   * every `view.steps[]` entry back into `preconditionSteps[]` (chronological),
+   * and keeps the recorder itself running so the next Mark-start press picks
+   * the boundary back up. Per design doc §6: "Stop recording" exists for
+   * off-script side errands the reviewer doesn't want in the bundled spec.
+   */
+  async stopRecording() {
+    if (!Array.isArray(this.doc.preconditionSteps)) this.doc.preconditionSteps = [];
+    for (const view of this.doc.views) {
+      if (!Array.isArray(view.steps) || view.steps.length === 0) continue;
+      for (const step of view.steps) this.doc.preconditionSteps.push(step);
+      view.steps = [];
+    }
+    this.doc.preconditionSteps.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+    this.doc.recordingStartAt = null;
+    await this.persist();
+  }
+
+  /**
    * Returns a serializable summary suitable for the in-browser inspector.
    * Active = unsealed view for the given url (if any).
    */

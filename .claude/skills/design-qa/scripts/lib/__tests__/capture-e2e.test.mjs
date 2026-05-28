@@ -122,6 +122,14 @@ test('capture pipeline — e2e: redaction + routing + seal-on-nav', async () => 
     await page.goto(`file://${FIXTURE_PATH}`);
     await page.waitForSelector('#email');
 
+    // Install a spy for Node→shadow recorder-state pushes. The production
+    // overlay would register `window.__designQA_setRecorderState`; here we
+    // register a test stand-in that records every state object pushed.
+    await page.evaluate(() => {
+      window.__pushes = [];
+      window.__designQA_setRecorderState = (s) => { window.__pushes.push(s); };
+    });
+
     // --- 1. Pre-Mark-start: type email + canary password + click submit ---
     await clickCenter(page, '#email');
     await page.keyboard.type('andrew@example.com');
@@ -181,6 +189,54 @@ test('capture pipeline — e2e: redaction + routing + seal-on-nav', async () => 
       assert.ok(typeof s.t !== 'number' || s.t >= store.doc.recordingStartAt,
         `view step t=${s.t} is < recordingStartAt=${store.doc.recordingStartAt}`);
     }
+
+    // --- 2b. Node→shadow push delivered with active=true + a count ---
+    // The push is throttled (200ms); give it a beat to land.
+    await page.waitForTimeout(350);
+    const pushes = await page.evaluate(() => window.__pushes || []);
+    assert.ok(pushes.length >= 1, `expected ≥1 push, got ${pushes.length}`);
+    const lastPush = pushes[pushes.length - 1];
+    assert.equal(lastPush.active, true);
+    assert.equal(typeof lastPush.startedAtMs, 'number');
+    assert.ok(lastPush.count >= 1, `expected count ≥ 1 in last push, got ${lastPush.count}`);
+    // redactionCount comes from the redactor — at least 1 (the canary password
+    // was a labeled secret).
+    assert.ok(lastPush.redactionCount >= 1,
+      `expected redactionCount ≥ 1 in push, got ${lastPush.redactionCount}`);
+
+    // --- 2c. __designQA_fetchRecorderSteps returns the expected shape ---
+    const fetched = await page.evaluate(() => window.__designQA_fetchRecorderSteps());
+    assert.ok(Array.isArray(fetched.steps));
+    assert.ok(fetched.steps.length >= 1, 'expected ≥1 step from fetch');
+    assert.equal(typeof fetched.preconditionCount, 'number');
+    assert.equal(typeof fetched.redactionCount, 'number');
+    for (const s of fetched.steps) {
+      assert.equal(typeof s.id, 'string');
+      assert.equal(typeof s.kind, 'string');
+      assert.equal(typeof s.humanText, 'string');
+      assert.ok(s.humanText.length > 0, 'humanText should not be empty');
+    }
+    // Each humanText must not contain the canary value either.
+    const fetchedDump = JSON.stringify(fetched);
+    assert.equal(fetchedDump.split(CANARY_PASSWORD).length - 1, 0,
+      'fetchRecorderSteps response leaked the canary password');
+
+    // --- 2d. __designQA_stopRecording moves view.steps back to preconditions ---
+    const preCountBefore = (store.doc.preconditionSteps || []).length;
+    const movedStepCount = view.steps.length;
+    const stop = await page.evaluate(() => window.__designQA_stopRecording());
+    assert.equal(stop.ok, true);
+    assert.equal(store.doc.recordingStartAt, null);
+    // The previously-in-view steps are now in preconditions.
+    assert.equal((store.doc.preconditionSteps || []).length,
+      preCountBefore + movedStepCount,
+      'preconditionSteps should absorb the view.steps on stop');
+    assert.equal(view.steps.length, 0, 'view.steps should be empty after stop');
+    // Push should have delivered active=false eventually.
+    await page.waitForTimeout(350);
+    const finalPushes = await page.evaluate(() => window.__pushes || []);
+    const afterStop = finalPushes[finalPushes.length - 1];
+    assert.equal(afterStop.active, false);
 
     // --- 3. Navigate to second fixture → triggers framenavigated → seal ---
     await page.goto(`file://${NAV_TARGET}`);
