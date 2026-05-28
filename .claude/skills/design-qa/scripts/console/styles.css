@@ -218,6 +218,82 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .export-option-sub { font-size: 12px; color: var(--text-2); line-height: 1.4; }
 .export-dialog-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
 
+/* Steps disclosure (Spike 8 / 9d): `▸ Steps (N) [Preview spec]` row above
+   the comment cards. Toggle expands a numbered list with per-row [edit]/[×].
+   Mirrors the Figma-style overflow + resolve patterns already shipped here. */
+.steps-block { margin: 0 0 12px; padding: 10px 14px; background: var(--bg-2);
+  border: 1px solid var(--border); border-radius: 8px; }
+.steps-disclosure { display: flex; align-items: center; gap: 10px; }
+.steps-toggle { background: none; border: none; color: var(--text-2);
+  font-size: 12px; font-weight: 500; padding: 2px 4px; border-radius: 4px;
+  display: inline-flex; align-items: center; gap: 6px; }
+.steps-toggle:hover { color: var(--text); background: var(--bg-3); }
+.steps-preview-btn { margin-left: auto; background: transparent; color: var(--accent);
+  border: 1px solid transparent; border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 500; }
+.steps-preview-btn:hover { background: var(--accent-dim); border-color: var(--accent); }
+.steps-list { list-style: none; margin: 10px 0 2px; padding: 0;
+  display: flex; flex-direction: column; gap: 2px; }
+.step-row { display: grid; grid-template-columns: 22px 1fr auto; gap: 6px;
+  align-items: baseline; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
+.step-row:hover { background: var(--bg-3); }
+.step-num { color: var(--text-3); font-variant-numeric: tabular-nums; text-align: right; }
+.step-text { color: var(--text); cursor: text; word-break: break-word; }
+.step-text.step-omitted { text-decoration: line-through; color: var(--text-3); cursor: default; }
+.step-text-edit { width: 100%; background: var(--bg-3); border: 1px solid var(--border-strong);
+  border-radius: 4px; padding: 3px 6px; color: var(--text); font-size: 12px; font-family: inherit; }
+.step-text-edit:focus { outline: none; border-color: var(--accent); }
+.step-actions { display: inline-flex; gap: 4px; opacity: 0; transition: opacity 0.1s; }
+.step-row:hover .step-actions, .step-row.is-omitted .step-actions { opacity: 1; }
+.step-act-btn { background: transparent; color: var(--text-3); border: 1px solid transparent;
+  border-radius: 4px; padding: 1px 6px; font-size: 11px; line-height: 1.3; }
+.step-act-btn:hover { color: var(--text); background: var(--bg-4); border-color: var(--border); }
+.step-act-omit { font-weight: 600; }
+.steps-empty { padding: 10px 4px 2px; color: var(--text-3); font-size: 12px; }
+
+/* Preview-spec modal (Spike 8 / 9d): same backdrop conventions as the Export
+   chooser. Read-only syntax-highlighted .ts, redaction-count chip, copy. */
+.preview-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center; z-index: 1200; padding: 24px; }
+.preview-dialog { background: var(--bg-2); border: 1px solid var(--border-strong);
+  border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.65);
+  width: min(880px, 100%); max-height: 85vh; display: flex; flex-direction: column;
+  color: var(--text); overflow: hidden; }
+.preview-head { display: flex; align-items: center; gap: 10px;
+  padding: 12px 16px; border-bottom: 1px solid var(--border); }
+.preview-title { font-size: 13px; font-weight: 600; flex: 1; }
+.preview-body { padding: 14px 16px; overflow-y: auto; min-height: 0; flex: 1;
+  display: flex; flex-direction: column; gap: 12px; }
+.preview-body.preview-loading { color: var(--text-3); font-style: italic; }
+.preview-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.preview-spacer { flex: 1; }
+.preview-error { color: var(--danger); padding: 8px 0; }
+.preview-foot-hint { color: var(--text-3); font-size: 11px; }
+.preview-code { background: #161616; border: 1px solid var(--border);
+  border-radius: 6px; padding: 12px 14px; overflow: auto;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  font-size: 12px; line-height: 1.55; color: var(--text);
+  white-space: pre; }
+.preview-code-inner { display: block; }
+.tok-comment { color: #6a9955; font-style: italic; }
+.tok-string { color: #ce9178; }
+.tok-keyword { color: var(--accent); }
+
+/* Redaction-count chip: clickable when N > 0, expanding to the env-var list.
+   Accent-blue pill on dark background, matches the Figma-blue UI elsewhere. */
+.preview-redact-wrap { display: inline-flex; flex-direction: column; gap: 6px; }
+.preview-redact-chip { background: var(--accent-dim); color: var(--text);
+  border: 1px solid var(--accent); border-radius: 999px;
+  padding: 4px 12px; font-size: 12px; font-weight: 500; }
+.preview-redact-chip:hover { background: var(--accent); color: #fff; }
+.preview-redact-chip.is-open { background: var(--accent); color: #fff; }
+.preview-redact-chip.is-empty { background: var(--bg-3); border-color: var(--border);
+  color: var(--text-2); cursor: default; }
+.preview-redact-chip.is-empty:hover { background: var(--bg-3); color: var(--text-2); }
+.preview-redact-list { list-style: none; padding: 8px 12px;
+  background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-size: 12px;
+  color: var(--text-2); display: flex; flex-direction: column; gap: 4px; }
+
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--bg); }

@@ -29,6 +29,7 @@ import { spawn } from 'node:child_process';
 import { sessionSubPaths } from './paths.mjs';
 import { SessionStore } from './session.mjs';
 import { exportSession } from '../artifact/build.mjs';
+import { emitRecordingSpec } from './emit-spec.mjs';
 
 const MIME = {
   '.html': 'text/html', '.mjs': 'text/javascript', '.js': 'text/javascript',
@@ -43,7 +44,21 @@ const CONSOLE_OPS = {
   updatePin: 'editPin',
   resolvePin: 'resolvePin',
   deletePin: 'deletePin',
+  // Spike 8 / 9d — recorder step authoring.
+  // editStepText overrides the human-readable label only (code stays
+  // authoritative). omitStep / unomitStep toggle the step's `omitted` flag.
+  // setRecordingStartAt is allowlisted for the seam — 9d has no console UI
+  // calling it, but the wire is open for a future affordance.
+  editStepText: 'editStepText',
+  omitStep: 'omitStep',
+  unomitStep: 'unomitStep',
+  setRecordingStartAt: 'setRecordingStartAt',
 };
+
+/** Step mutations don't carry a viewId/pinId — they look up by stepId, which
+ *  may live in any view OR in preconditionSteps. The ownership guard doesn't
+ *  apply (no live-browser-owned screens hold authored step text). */
+const STEP_OPS = new Set(['editStepText', 'omitStep', 'unomitStep', 'setRecordingStartAt']);
 
 export async function startHttpServer(store, { sessionDir, consoleDir, log = () => {} }) {
   const subs = sessionSubPaths(sessionDir);
@@ -240,13 +255,22 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
 
     // Live-screen ownership only matters for the LIVE owned session — an
     // archived session has no unsealed browser view, so the guard is a no-op
-    // there. Applied via target so it follows the right doc.
-    const view = op === 'createPin'
-      ? target.findViewById(args.viewId)
-      : target.findPin(args.pinId).view;
+    // there. Applied via target so it follows the right doc. Step ops don't
+    // carry a view/pin id (steps live across views + preconditions), so the
+    // guard is skipped for them entirely.
+    const view = STEP_OPS.has(op)
+      ? null
+      : op === 'createPin'
+        ? target.findViewById(args.viewId)
+        : target.findPin(args.pinId).view;
     try {
       if (view) target._assertConsoleEditable(view);
-      const result = await target[method](args);
+      // setRecordingStartAt takes a positional ts, not an args object — match
+      // the SessionStore signature so this op behaves identically to the
+      // overlay binding's call path.
+      const result = op === 'setRecordingStartAt'
+        ? await target.setRecordingStartAt(args.ts)
+        : await target[method](args);
       return sendJson(res, 200, { ok: true, result, session: target.doc });
     } catch (err) {
       return sendJson(res, 409, { ok: false, error: String(err?.message || err) });
@@ -346,6 +370,20 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
       const url = decodeURIComponent(qIdx === -1 ? rawUrl : rawUrl.slice(0, qIdx));
       const query = qIdx === -1 ? new URLSearchParams() : new URLSearchParams(rawUrl.slice(qIdx + 1));
 
+      if (req.method === 'GET' && url === '/api/recording-preview') {
+        // Spike 8 / 9d: emit the would-be-shipped recording.spec.ts on demand
+        // for the console's [Preview spec] modal. Optional `?id=<basename>`
+        // targets a sibling (lookback). The emitter is pure — pass the doc
+        // and return both the text and the env-var set the modal's chip needs.
+        const target = await resolveTargetStore(query.get('id'));
+        if (target === null) return void sendJson(res, 404, { ok: false, error: 'unknown session id' });
+        try {
+          const { text, envVars } = emitRecordingSpec(target.doc);
+          return void sendJson(res, 200, { text, envVars, redactionCount: envVars.length });
+        } catch (err) {
+          return void sendJson(res, 500, { ok: false, error: String(err?.message || err) });
+        }
+      }
       if (req.method === 'POST' && url === '/api/mutate') return void handleMutate(req, res);
       if (req.method === 'POST' && url === '/api/upload') return void handleUpload(req, res);
       if (req.method === 'POST' && url === '/api/export') return void handleExport(req, res);

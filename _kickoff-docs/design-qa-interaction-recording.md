@@ -911,7 +911,31 @@ until that lands.
 **Verify:** manual in-browser only (the binding can't be smoked headlessly
 without the overlay). User runs through Mark-start → record → Reset → Stop.
 
-### Phase 9d — Console UI
+### Phase 9d — Console UI (SHIPPED 2026-05-28 + verified)
+
+Landed exactly as planned, plus the "lift emit-spec to 9d" lean (so 9e is a
+thin wrapper). Bug fixes that landed atop 9d from the in-browser pass and
+their architectural consequences are recorded in the project's memory
+(`spike_8_interaction_recording.md` + `architecture_decisions.md`), not here
+— this doc stays a design artifact. Headline rules:
+
+- During active recording, every visited URL is preserved as a view (sealed
+  steps-only if no pin landed). Pre-Mark-start the original "drop empty
+  unsealed views" rule still applies. Helper `materializeStepsOnlyView` +
+  predicate `isRecordingActive()` in `lib/capture.mjs`.
+- Recorder filters events targeting our own UI at the adapter boundary —
+  `isOverlayAction(actionData)` in `lib/recorder.mjs` matching
+  `__design_qa_host` / `x-pw-*`. Applied in both `actionAdded` and
+  `actionUpdated` BEFORE `events[]` / redactor / sinks see them.
+- Overlay UI state (panel expanded, popover open) lives Node-side
+  (`overlayUiState` + `__designQA_getUiState` / `__designQA_setUiState`
+  bindings) so it survives cross-origin navigation. Replaces the per-origin
+  localStorage of pre-9d.
+- Recorder adapter dispatch is XOR — `actionUpdated` fires `onUpdate` only,
+  never both. Earlier "both fire" semantic was the root of "20 steps per
+  keystroke."
+
+### Phase 9d — Console UI (original plan)
 
 The reviewer's authoring surface for the recording. Per §7, all affordances
 work identically in lookback per the existing "lookback is fully editable" rule.

@@ -1,5 +1,6 @@
 import { el } from '../lib/dom.mjs';
 import { showToast } from './toast.mjs';
+import { renderStepsDisclosure } from './steps.mjs';
 
 /**
  * Comments panel — the pins of the active screen as Figma-style cards.
@@ -29,15 +30,21 @@ export function renderComments(ctx, root) {
   if (!view) { pageEl.textContent = '—'; root.replaceChildren(); return; }
   pageEl.textContent = view.name;
 
+  // Spike 8 / 9d — recorded-steps disclosure sits above the comment cards. The
+  // node returns null if there are no steps AND no preview surface, so the
+  // pre-Spike-8 layout is unchanged on legacy / fixture sessions.
+  const stepsNode = renderStepsDisclosure(ctx);
+
   const pins = ctx.visiblePins(view);
   if (pins.length === 0) {
     const total = view.pins.length;
-    root.replaceChildren(el('div', { class: 'empty-note' },
-      total === 0 ? 'No pins on this screen yet. Use “+ Add pin”.' : 'No pins match the current filter.'));
+    const empty = el('div', { class: 'empty-note' },
+      total === 0 ? 'No pins on this screen yet. Use “+ Add pin”.' : 'No pins match the current filter.');
+    root.replaceChildren(...[stepsNode, empty].filter(Boolean));
     return;
   }
 
-  root.replaceChildren(...pins.map((p) => buildCard(ctx, p, view)));
+  root.replaceChildren(...[stepsNode, ...pins.map((p) => buildCard(ctx, p, view))].filter(Boolean));
 }
 
 function buildCard(ctx, p, view) {

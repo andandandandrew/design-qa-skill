@@ -66,6 +66,24 @@ export class LookbackStore {
   resolvePin(args) { return this._mutate('resolvePin', args); }
   deletePin(args) { return this._mutate('deletePin', args); }
 
+  // Spike 8 / 9d — same step-authoring ops the live HttpStore exposes; each
+  // hits /api/mutate?id=<basename>. Lookback editing is fully writable per
+  // the Phase-6 redesign — no new gates here.
+  editStepText(args) { return this._mutate('editStepText', args); }
+  omitStep(args) { return this._mutate('omitStep', args); }
+  unomitStep(args) { return this._mutate('unomitStep', args); }
+
+  /** Preview the sibling's recording.spec.ts via the server's pure emitter.
+   *  Returns the same shape as HttpStore.fetchRecordingPreview(). */
+  async fetchRecordingPreview() {
+    const res = await fetch(
+      `${this.base}/api/recording-preview?id=${encodeURIComponent(this.basename)}`,
+      { cache: 'no-store' },
+    );
+    if (!res.ok) throw new Error(`preview failed (${res.status})`);
+    return res.json();
+  }
+
   /** Manual screen upload — identical to HttpStore.addManualScreen, just
    *  targeted at the archived sibling via `?id=`. */
   async addManualScreen({ name, file, width, height }) {

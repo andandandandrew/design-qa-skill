@@ -69,6 +69,21 @@ export class HttpStore {
   resolvePin(args) { return this._mutate('resolvePin', args); }
   deletePin(args) { return this._mutate('deletePin', args); }
 
+  // Spike 8 / 9d — recorder step authoring. Same allowlist + write path as
+  // pin ops; the server routes by step id which lives across views.
+  editStepText(args) { return this._mutate('editStepText', args); }
+  omitStep(args) { return this._mutate('omitStep', args); }
+  unomitStep(args) { return this._mutate('unomitStep', args); }
+
+  /** Fetch the would-be-shipped recording.spec.ts text + env vars referenced.
+   *  Powers the console's [Preview spec] modal. Returns null on transport
+   *  failure so the caller can decide how loudly to fail. */
+  async fetchRecordingPreview() {
+    const res = await fetch(`${this.base}/api/recording-preview`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`preview failed (${res.status})`);
+    return res.json();
+  }
+
   /** Re-pull the authoritative doc (used on SSE change + manual refresh). */
   async refresh() {
     const res = await fetch(`${this.base}/api/session`, { cache: 'no-store' });

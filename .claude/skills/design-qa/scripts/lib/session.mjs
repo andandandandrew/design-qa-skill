@@ -473,6 +473,63 @@ export class SessionStore {
   }
 
   /**
+   * Locate a step by id across precondition + every view's steps[]. Returns
+   * `{ list, step }` so callers can mutate in place and persist. `list` is the
+   * actual array reference (preconditionSteps or one view's steps); `step` is
+   * the matching entry. Used by the console-facing step mutations below.
+   */
+  findStep(stepId) {
+    const pre = this.doc.preconditionSteps;
+    if (Array.isArray(pre)) {
+      const step = pre.find((s) => s.id === stepId);
+      if (step) return { list: pre, step };
+    }
+    for (const view of this.doc.views) {
+      if (!Array.isArray(view.steps)) continue;
+      const step = view.steps.find((s) => s.id === stepId);
+      if (step) return { list: view.steps, step };
+    }
+    return { list: null, step: null };
+  }
+
+  /**
+   * Console-side override of a step's human-readable label (9d). The underlying
+   * recorder `code` stays authoritative — humanText is just what the step list
+   * and emitted `recording-steps.md` render. Empty / falsy clears the override
+   * (falls back to describeAction at render time).
+   */
+  async editStepText({ stepId, humanText }) {
+    const { step } = this.findStep(stepId);
+    if (!step) throw new Error(`step ${stepId} not found`);
+    const next = typeof humanText === 'string' ? humanText.trim() : '';
+    step.humanText = next || null;
+    await this.persist();
+    return step;
+  }
+
+  /**
+   * Console-side omit (9d). `step.omitted = true` removes the step from the
+   * emitted spec + step list. We DON'T splice it out of the array so a future
+   * unomit + emit round-trip is lossless. The UI renders omitted rows
+   * struck-through with an Undo toast — same pattern as resolve.
+   */
+  async omitStep({ stepId }) {
+    const { step } = this.findStep(stepId);
+    if (!step) throw new Error(`step ${stepId} not found`);
+    step.omitted = true;
+    await this.persist();
+    return step;
+  }
+
+  async unomitStep({ stepId }) {
+    const { step } = this.findStep(stepId);
+    if (!step) throw new Error(`step ${stepId} not found`);
+    step.omitted = false;
+    await this.persist();
+    return step;
+  }
+
+  /**
    * Turn the recorded-path emitter OFF. Clears `recordingStartAt`, moves
    * every `view.steps[]` entry back into `preconditionSteps[]` (chronological),
    * and keeps the recorder itself running so the next Mark-start press picks
