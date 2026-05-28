@@ -667,6 +667,185 @@ Phasing is **orientation only**; the next session re-litigates breaks/sizing bef
 
 ---
 
+## 14. Approved phasing (2026-05-28)
+
+The §13 planning entry collapses into this. Sizes are deliberate: 9a is the
+load-bearing foundation (security boundary + schema) and is sized to *not*
+leak into 9b; 9c starts with a doc beat for the Node→shadow binding before
+any UI code.
+
+### Settled decisions (don't re-open in a phase)
+
+- Runnable form: **`.spec.ts`** (Playwright Test), not a plain `node` script.
+- Playwright version: **pin 1.60.0** (POC-validated). Bumping is a separate task post-9e.
+- Step reordering in the console: **disabled v1**. Recorded selectors assume order-of-operations.
+- Multi-tab recording: **out of scope**.
+- Redaction false-negatives: **heuristic alone v1** — no DOM `input.type` query. The
+  substitution form is `process.env.DESIGN_QA_FIELD_<NAME> ?? ''` regardless,
+  so a missed field is an annoyance (env var to set), not a leak.
+- `redactionPatterns` in `design-qa.config.json`: **yes, optional, additive to defaults**.
+  Defaults are what the smoke test validates.
+- `[Preview spec]` modal: **clickable redaction-count chip** that expands to
+  the list of redacted env-var names (`DESIGN_QA_FIELD_PASSWORD`, etc.). The
+  per-recording map already carries them.
+- Per-step `[×]` (omit) UX: **struck-through visible + inline "Undo"** — not hidden.
+  Same Figma-style undo pattern as the resolve toast; cheaper to recover from misclick.
+- Schema v4 migration belongs in **9a**, not 9b, so the in-9a integration test
+  can prove redaction-in-emitter end-to-end against a persisted doc.
+
+### Phase 9a — Recorder adapter + redaction module + schema v4 + integration test
+
+Load-bearing foundation. Everything else builds on this. Ships as one
+commit (or a tight pair) because redaction is a security boundary that
+can't ship after the recorder.
+
+**Lands:**
+
+- `scripts/lib/recorder.mjs` — wraps `context._enableRecorder({…, recorderMode: 'api'}, eventSink)`.
+  Exposes `attachRecorder(context) → { onAction, onUpdate, onSignal, flush, stop }`.
+  Pins Playwright 1.60.0 in `package.json`.
+- `scripts/lib/redact.mjs` — validated algorithm: selector-name regex
+  (`/password|pwd|secret|token|api[ _-]?key|otp|2fa|cvv|ssn|credit[ _-]?card/i`)
+  + min length 4 + prefix-collapse + forward + retroactive scrub.
+  Substitution: `code` snippets get `process.env.DESIGN_QA_FIELD_<NAME> ?? ''`;
+  bare strings (`action.text`, `ariaSnapshot`, human step text) get
+  `[REDACTED DESIGN_QA_FIELD_<NAME>]`. Per-recording map; rebuilt at each
+  `attachRecorder` call.
+- `scripts/lib/__tests__/redact.test.mjs` — port of `spike8-redaction-smoke.mjs`
+  as a permanent regression. After landing, the throwaway
+  `spike8-{poc,smoke}.mjs` are deletable; `spike8-redaction-smoke.mjs` is
+  superseded by the test.
+- `scripts/lib/session.mjs` — `SCHEMA_VERSION 3 → 4`. `migrateDoc()` adds
+  `view.steps = []` and `session.recordingStartAt = null` idempotently.
+  No new mutation methods yet — that's 9b.
+- `scripts/lib/__tests__/recorder-integration.test.mjs` — fake login fixture:
+  launch persistent context against a tiny local HTML form, attach recorder,
+  fill a labeled-password field + click submit, assert (a) `view.steps[]`
+  holds the actions, (b) `recording.spec.ts` emission has `.fill(process.env.…)`,
+  (c) `ariaSnapshot` in emitted output contains no plaintext password, (d)
+  redaction count > 0. End-to-end record → redact → persist → emit, no UI.
+- `scripts/lib/config.mjs` — `readConfig()` extends to surface
+  `redactionPatterns: string[]` (optional, defaults to empty; merged into
+  the regex set inside `redact.mjs` only if present).
+
+**Does NOT land:** `capture.mjs` wiring (that's 9b), any UI (9c+), any export emitters (9e).
+
+**Verify:** `node --check` clean. Both new tests pass headless. `migrateDoc()`
+idempotent on a v3 fixture.
+
+### Phase 9b — Segment-on-seal wiring
+
+Connect the 9a foundation to the live capture loop.
+
+**Lands:**
+
+- `scripts/lib/capture.mjs` — `attachCapture()` now also calls `attachRecorder()`.
+  Per §5 segmentation: `framenavigated` closes current segment + opens next;
+  Save closes without opening; New closes + opens with a synthetic `// fresh
+  capture on same URL` marker. `recorder.flush(viewId)` is awaited alongside
+  `flushScreenshot(viewId)` inside the existing seal path.
+- `scripts/lib/session.mjs` — `SessionStore.appendStep({viewId, step})` writes
+  via the same atomic temp+rename persist. `setRecordingStartAt(ts)` for
+  Mark-start. Pre-Mark-start steps land in `session.preconditionSteps[]`
+  (added to schema in 9a; populated here).
+
+**Does NOT land:** UI for Mark-start (9c) or the steps disclosure (9d). The
+recorder is already on from launch per §6; Mark-start just controls a
+boundary in the persisted data.
+
+**Verify:** record a multi-segment path against the 9a fake fixture; assert
+seal on framenavigated produces the expected per-view `steps[]` slices.
+
+### Phase 9c — Capture-overlay UI
+
+Starts with a ~30-minute design beat on the Node→shadow-DOM binding, no code
+until that lands.
+
+**Design beat (before code):**
+
+- Pick the Node→shadow-DOM push mechanism. Lean: `page.evaluate` calls
+  `window.__designQA_setRecorderState({active, count, startedAtMs})` exposed
+  by the overlay shadow root. Mirror of today's page→Node `exposeBinding`
+  pattern, no polling.
+- Sketch the popover's data model: pushed (active/count/startedAtMs/steps[])
+  vs. derived locally (stopwatch ticks from `startedAtMs`).
+- Append outcome to §6 of this doc as a short "Binding mechanism" subsection.
+
+**Lands:**
+
+- Overlay verb bar — `⏺ Mark start` (resting) → `🔴 Recording · N` (active)
+  per §6. State pushed from `capture.mjs` via the chosen binding.
+- View-steps popover (shadow DOM): header, scrolling step list, `[Reset start
+  here]` + `[Stop recording]`. Native `confirm` stays banned — popover is
+  the surface.
+- "Mark start" wiring: clicking from active opens the popover; clicking from
+  resting calls `SessionStore.setRecordingStartAt(now)` and morphs the button.
+
+**Verify:** manual in-browser only (the binding can't be smoked headlessly
+without the overlay). User runs through Mark-start → record → Reset → Stop.
+
+### Phase 9d — Console UI
+
+The reviewer's authoring surface for the recording. Per §7, all affordances
+work identically in lookback per the existing "lookback is fully editable" rule.
+
+**Lands:**
+
+- `scripts/console/ui/steps.mjs` (new) — `▸ Steps (N)` disclosure under each
+  screen heading per §7 mock. Expanded list shows numbered, human-readable
+  steps; per-row `[edit]` (inline single-line input on the human text only —
+  underlying `code` unchanged) and `[×]` (struck-through visible + Undo).
+- `scripts/console/ui/preview-spec.mjs` (new) — `[Preview spec]` modal.
+  Syntax-highlighted `.ts`, copy-to-clipboard, **clickable redaction-count
+  chip** that expands to the list of redacted env-var names. Modal is
+  read-only — no editing in the preview.
+- Per-step mutations route through `/api/mutate` (already allowlisted op
+  pattern). New ops: `editStepText`, `omitStep`, `unomitStep`, `setRecordingStartAt`.
+- `scripts/console/styles.css` — token-aligned styles for the disclosure,
+  inline edit, redaction chip + expansion.
+
+**Does NOT land:** step reordering (locked out for v1).
+
+**Verify:** headless fixture run (filter/sort/select unregressed, steps
+disclosure renders + edit/omit/undo all work) plus the user's in-browser pass.
+
+### Phase 9e — Bundle emitters
+
+Two file writes in `exportSession()`. Smallest phase.
+
+**Lands:**
+
+- `scripts/lib/emit-spec.mjs` (new) — given a session doc, emit
+  `recording.spec.ts` (one `test(…)` per session; `// --- view: <name> ---`
+  separators; `// === PRECONDITION ===` scaffold from
+  `session.preconditionSteps[]`; `// === RECORDED PATH ===` from union of
+  `views[].steps[]`). Redaction substitutions applied — same `redact.mjs`
+  used at capture time, idempotent here.
+- `scripts/lib/emit-steps.mjs` (new) — `recording-steps.md`. Same content
+  the View-steps popover shows, plus the precondition block.
+- `scripts/artifact/build.mjs` — `exportSession()` writes both files into
+  the silent `<sessionDir>/exports/<ts>-vN/` archive.
+- `scripts/lib/http-server.mjs` — the on-the-fly `zip -r -X -q - .` already
+  picks up files in the bundle dir; just confirm both new entries land in the
+  emitted zip. The single-file Share gets a "(no replay script)" sub-text
+  string update in the chooser modal — bundle gets "+ replay script".
+- Phase-7 bundle `README.md` — Spike-8 slot is no longer "future."
+
+**Verify:** headless export round-trip — record a tiny path, share as bundle,
+unzip, assert both files present with redactions applied; run
+`npx playwright test recording.spec.ts` against the same fake fixture and
+assert it passes.
+
+### Out of band
+
+- **Spike 9** (post-change regression diff) stays a separate research spike,
+  starts only after 9e ships. Not pulled into 9-anything.
+- **Bumping Playwright off 1.60.0** is its own task post-9e.
+- **DOM `input.type` query at fill-time** is a future hardening only — open
+  it if a real false-negative happens in practice.
+
+---
+
 ## Related
 
 - `_kickoff-docs/design-qa-spikes.md` §Spike 8 (open questions enumerated)
