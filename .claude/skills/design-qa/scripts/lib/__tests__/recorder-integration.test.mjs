@@ -66,7 +66,19 @@ test('recorder + redaction: fake login form does not leak password', async (t) =
     });
 
     const redactor = createRedactor();
-    const recorder = await attachRecorder(context, { redactor, headless: true });
+    // Bug regression (2026-05-28): emit() dispatch must be XOR — onEvent
+    // fires for fresh actions only, onUpdate fires for coalesces only. Earlier
+    // versions called BOTH on every update, which (combined with capture.mjs's
+    // append-on-event wiring) made each keystroke a separate persisted step.
+    // Capture both counters here so the assertions at the bottom can prove it.
+    const onEventCalls = [];
+    const onUpdateCalls = [];
+    const recorder = await attachRecorder(context, {
+      redactor,
+      headless: true,
+      onEvent: (ev) => onEventCalls.push(ev),
+      onUpdate: (ev, prev) => onUpdateCalls.push({ ev, prev }),
+    });
 
     const page = context.pages()[0] || await context.newPage();
 
@@ -123,6 +135,31 @@ test('recorder + redaction: fake login form does not leak password', async (t) =
     const leakCount = fullDump.split(FAKE_PASSWORD).length - 1;
     assert.equal(leakCount, 0,
       `password value leaked ${leakCount} time(s) in event JSON`);
+
+    // (e) XOR dispatch regression. Each fresh recorder event (actionAdded /
+    // signalAdded) pushes one entry into `events[]` and fires onEvent once.
+    // Each actionUpdated REPLACES the last action in `events[]` (length
+    // unchanged) and fires onUpdate once. So onEvent calls == events.length.
+    // If the bug ever returns (both callbacks fire for an actionUpdated),
+    // onEvent will exceed events.length by the number of update coalesces.
+    assert.equal(onEventCalls.length, recorder.events.length,
+      `XOR dispatch: onEvent should fire once per fresh event (events.length). `
+      + `Got ${onEventCalls.length} onEvent calls vs ${recorder.events.length} events `
+      + `— the difference is the number of duplicated steps a real session would persist.`);
+    // Typing FAKE_PASSWORD char-by-char should produce at least a few
+    // actionUpdated coalesces. (Exact count depends on the recorder's merge
+    // window; the floor of 1 is enough to prove the path is exercised.)
+    assert.ok(onUpdateCalls.length > 0,
+      `expected at least one actionUpdated during keyboard.type, got ${onUpdateCalls.length}`);
+    // The fill action should land as ONE onEvent call (the fresh actionAdded),
+    // not N (one per character). This is the user-visible "20 steps per
+    // keystroke" bug if it regresses.
+    const passwordFillFreshAdds = onEventCalls.filter(
+      (ev) => ev?.data?.action?.name === 'fill'
+        && /password/i.test(ev?.data?.action?.selector || ''),
+    ).length;
+    assert.equal(passwordFillFreshAdds, 1,
+      `expected exactly 1 fresh actionAdded for the password fill (typing collapses to one logical fill), got ${passwordFillFreshAdds}`);
   } finally {
     if (context) try { await context.close(); } catch { /* noop */ }
     try { await fs.rm(profile, { recursive: true, force: true }); } catch { /* noop */ }

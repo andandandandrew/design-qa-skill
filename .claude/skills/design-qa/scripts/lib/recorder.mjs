@@ -35,6 +35,31 @@ import { createRedactor } from './redact.mjs';
 const EVENT_KINDS = Object.freeze({ ACTION: 'action', SIGNAL: 'signal' });
 
 /**
+ * Selector fragments that mean "this event happened on our own UI, not on
+ * something the engineer needs to replay." Dropped at the boundary so the
+ * persisted event log + emitted `.spec.ts` never reference them.
+ *
+ * `__design_qa_host` — our overlay's closed-shadow host id (see
+ *   `scripts/overlay/inject.js`). Clicks INSIDE the overlay retarget to this
+ *   host because the shadow root is closed, so a single id-match catches
+ *   everything: Mark-start chip, popover, comment composer, panel buttons.
+ * `x-pw-` — Playwright's in-page recorder UI (glass, tooltip, highlight,
+ *   action-point). Most are hidden by the addInitScript stylesheet we ship,
+ *   but a stray click on one (e.g. during a teardown frame) shouldn't reach
+ *   the persisted log either.
+ */
+const OVERLAY_SELECTOR_RE = /__design_qa_host|x-pw-/i;
+
+/** True if an `ActionInContext` is on our own UI and should be dropped before
+ *  it touches `events[]` or the caller's sinks. Defensive: defaults to KEEP
+ *  on missing/odd inputs so a regex change can never lose real recordings. */
+export function isOverlayAction(actionData) {
+  const sel = actionData?.action?.selector;
+  if (typeof sel !== 'string' || sel.length === 0) return false;
+  return OVERLAY_SELECTOR_RE.test(sel);
+}
+
+/**
  * Attach the programmatic recorder to a persistent Chromium context.
  *
  * @param {import('playwright').BrowserContext} context
@@ -43,13 +68,17 @@ const EVENT_KINDS = Object.freeze({ ACTION: 'action', SIGNAL: 'signal' });
  *        Pre-built redactor (e.g. one configured with `redactionPatterns` from
  *        `design-qa.config.json`). If absent, a default redactor is created.
  * @param {(ev: object) => void} [opts.onEvent]
- *        Called once per finalized event (action OR signal), AFTER scrubbing.
- *        For `actionUpdated` coalescing this fires AGAIN with the merged form;
- *        the prior `actionAdded` callback is superseded (see `onUpdate`).
+ *        Called once per FRESH event (actionAdded / signalAdded), after scrubbing.
+ *        NOT called for `actionUpdated` coalesces — those fire `onUpdate` only.
+ *        Dispatch is XOR: every recorder callback hits exactly one of
+ *        `onEvent` / `onUpdate`, never both. (Earlier versions called both on
+ *        every update, which made a single keystroke materialize as N steps
+ *        downstream — capture.mjs would appendStep on `onEvent` *and*
+ *        replaceStep on `onUpdate`. Fixed 2026-05-28 from in-browser bug.)
  * @param {(ev: object, prev: object) => void} [opts.onUpdate]
- *        Optional. Called when an `actionUpdated` replaces a prior `action`
- *        event — useful for 9b's segmentation if it needs to know about the
- *        coalesce. `ev` is the new merged event; `prev` is the one it replaced.
+ *        Called when an `actionUpdated` replaces a prior `action` event. `ev`
+ *        is the new merged event; `prev` is the one it replaced. Callers use
+ *        this to UPDATE an already-persisted step in place rather than append.
  * @param {boolean} [opts.headless=false]
  *        Threaded into the recorder's internal `launchOptions.headless`.
  *        Production capture is headed (the reviewer drives Chromium); the
@@ -78,10 +107,15 @@ export async function attachRecorder(context, opts = {}) {
 
   function emit(ev, prev) {
     if (stopped) return;
+    // XOR dispatch: an `actionUpdated` is logically "this same step's data got
+    // refined" (typing one more character) — NOT a brand-new step. Calling
+    // both onUpdate and onEvent here would make capture.mjs both replaceStep
+    // and appendStep for every keystroke, producing N steps per fill.
     if (prev) {
       try { onUpdate(ev, prev); } catch (err) { logSinkError(err, 'onUpdate'); }
+    } else {
+      try { onEvent(ev); } catch (err) { logSinkError(err, 'onEvent'); }
     }
-    try { onEvent(ev); } catch (err) { logSinkError(err, 'onEvent'); }
   }
 
   function safePageUrl(page) {
@@ -104,6 +138,12 @@ export async function attachRecorder(context, opts = {}) {
     },
     {
       actionAdded(page, data, code) {
+        // Filter at the boundary: clicks/typing on our own overlay host (or a
+        // stray Playwright UI element) should not enter the persisted log.
+        // Dropping here keeps `events[]` clean, so the actionUpdated "find +
+        // replace last action" loop never mistakenly replaces a real action
+        // with a follow-up to a dropped overlay action.
+        if (isOverlayAction(data)) return;
         const ev = {
           kind: EVENT_KINDS.ACTION,
           t: Date.now(),
@@ -124,6 +164,10 @@ export async function attachRecorder(context, opts = {}) {
       },
 
       actionUpdated(page, data, code) {
+        // Same boundary filter as actionAdded — an update for a dropped
+        // overlay action is also unwanted, AND must not touch the prior real
+        // action stored in events[]. Drop completely.
+        if (isOverlayAction(data)) return;
         // Coalesce: the recorder merges progressive fills/typing into one
         // logical action and re-emits the merged form here. Replace the most
         // recent stored ACTION event (signals interspersed are left in place).
