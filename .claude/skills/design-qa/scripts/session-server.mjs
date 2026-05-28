@@ -20,6 +20,7 @@ import { server as ipcServer } from './lib/ipc.mjs';
 import { buildArtifact } from './artifact/build.mjs';
 import { attachCapture } from './lib/capture.mjs';
 import { startHttpServer } from './lib/http-server.mjs';
+import { readConfig } from './lib/config.mjs';
 
 function parseArgs(argv) {
   const opts = { capture: true };
@@ -76,6 +77,19 @@ async function main() {
   const httpSrv = await startHttpServer(store, { sessionDir, consoleDir, log });
   fs.writeFileSync(subs.consoleUrlFile, httpSrv.consoleUrl);
 
+  // Spike 8: read project-level redaction patterns (additive to the built-in
+  // defaults in lib/redact.mjs). Failure to read here is non-fatal — capture
+  // still has safe defaults. cli.mjs guarantees the config file exists by the
+  // time we boot, so the ENOENT path is only hit by test harnesses.
+  let redactionPatterns = [];
+  try {
+    const root = path.dirname(sessionDir);
+    const cfg = await readConfig(root);
+    if (cfg && Array.isArray(cfg.redactionPatterns)) redactionPatterns = cfg.redactionPatterns;
+  } catch (err) {
+    log(`config read failed, proceeding with default redaction only: ${err.message}`);
+  }
+
   // Capture hat — optional, lazy-attached only for browser capture.
   let capture = null;
   if (opts.capture) {
@@ -85,6 +99,7 @@ async function main() {
       browserProfile: subs.browserProfile,
       overlayInjectPath,
       log,
+      redactionPatterns,
     });
     // If the user closes the entire capture browser, seal any active view the
     // same way `end` does (so an abrupt close still commits %-normalized,

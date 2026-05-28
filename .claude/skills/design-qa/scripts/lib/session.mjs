@@ -381,6 +381,81 @@ export class SessionStore {
     return pin;
   }
 
+  // --- Spike 8: recorded-step mutations -----------------------------------
+  // Steps are written by the capture layer's recorder adapter (one writer:
+  // the active capture). Each step is a minimal recorder-event projection:
+  //   { id, kind, selector, text, url, key, options, code, t, pageUrl, omitted }
+  // The store owns id assignment (`step_<hex>`) and the omitted default.
+
+  async appendStep({ viewId, step }) {
+    const view = this.findViewById(viewId);
+    if (!view) throw new Error(`view ${viewId} not found`);
+    if (!Array.isArray(view.steps)) view.steps = [];
+    const persisted = { id: newId('step'), omitted: false, ...step };
+    view.steps.push(persisted);
+    await this.persist();
+    return persisted;
+  }
+
+  async appendPreconditionStep(step) {
+    if (!Array.isArray(this.doc.preconditionSteps)) this.doc.preconditionSteps = [];
+    const persisted = { id: newId('step'), omitted: false, ...step };
+    this.doc.preconditionSteps.push(persisted);
+    await this.persist();
+    return persisted;
+  }
+
+  /**
+   * In-place replace of a previously-appended step. Used by the recorder's
+   * `actionUpdated` coalesce path — typing "hello" lands as one `actionAdded`
+   * + N `actionUpdated`s, each carrying the merged form; we keep the latest
+   * persisted version. Searches preconditions first, then every view's steps.
+   */
+  async replaceStep({ id, updates }) {
+    for (const s of this.doc.preconditionSteps || []) {
+      if (s.id === id) { Object.assign(s, updates, { id }); await this.persist(); return s; }
+    }
+    for (const view of this.doc.views) {
+      if (!Array.isArray(view.steps)) continue;
+      for (const s of view.steps) {
+        if (s.id === id) { Object.assign(s, updates, { id }); await this.persist(); return s; }
+      }
+    }
+    throw new Error(`step ${id} not found`);
+  }
+
+  /**
+   * Set the Mark-start timestamp AND retroactively trim. Every step in any
+   * `view.steps[]` with `step.t < ts` is moved into `preconditionSteps[]`;
+   * preconditionSteps is kept time-sorted. This is what makes Mark-start
+   * forgiving: the reviewer can pin first and press Mark-start later.
+   *
+   * Idempotent on re-press: pressing again with a later `ts` advances the
+   * boundary (extra steps drop into preconditionSteps); pressing with an
+   * earlier `ts` is a no-op because all post-press steps already have
+   * `t >= existing ts`. Pre-mark steps already in preconditionSteps stay there.
+   *
+   * NOTE: this does NOT touch any in-flight per-URL segment buffer the capture
+   * layer holds (those aren't persisted). The capture layer drains buffers
+   * itself when Mark-start fires.
+   */
+  async setRecordingStartAt(ts) {
+    this.doc.recordingStartAt = ts;
+    if (!Array.isArray(this.doc.preconditionSteps)) this.doc.preconditionSteps = [];
+    for (const view of this.doc.views) {
+      if (!Array.isArray(view.steps) || view.steps.length === 0) continue;
+      const keep = [];
+      for (const step of view.steps) {
+        if (typeof step.t === 'number' && step.t < ts) this.doc.preconditionSteps.push(step);
+        else keep.push(step);
+      }
+      view.steps = keep;
+    }
+    this.doc.preconditionSteps.sort((a, b) => (a.t ?? 0) - (b.t ?? 0));
+    await this.persist();
+    return ts;
+  }
+
   /**
    * Returns a serializable summary suitable for the in-browser inspector.
    * Active = unsealed view for the given url (if any).
