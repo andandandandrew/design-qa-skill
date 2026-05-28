@@ -8,9 +8,5 @@ design-qa-sessions/
 # to the user's machine, never committed; see scripts/lib/config.mjs.
 design-qa.config.json
 
-# Spike 8 POC outputs — throwaway, never committed
-.claude/skills/design-qa/scripts/spike8-poc-out/
-.claude/skills/design-qa/scripts/spike8-smoke-out/
-
 # OS
 .DS_Store
