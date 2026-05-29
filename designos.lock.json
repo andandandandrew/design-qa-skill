@@ -1,0 +1,92 @@
+{
+  "_comment": "Provenance for the DesignOS material adopted by the design-qa skill (Phase 8). Diff `source.*Rev` and `adopted[].rev` against the live _ds_manifest.json to detect drift. See _kickoff-docs + the Phase 8 work for context.",
+  "lockfileVersion": 1,
+  "pulledAt": "2026-05-28",
+  "adoptedInPhase": "Phase 8 — UI consistency & DesignOS parity",
+  "source": {
+    "system": "DesignOS",
+    "version": "v2",
+    "tokensRev": "f7973d",
+    "manifestUpdated": "2026-05-28",
+    "localExportPath": "/Users/andrewfrank/code/design-gen/DesignOS",
+    "contextPack": "context/",
+    "manifest": "_ds_manifest.json",
+    "note": "DesignOS is a Claude Design project, not a package; this is a local export pulled beside the design-qa-skill repo (DESIGN-CONTEXT.md §0/§6). Re-pull + re-diff before adopting new ids."
+  },
+  "consumedBy": {
+    "applicationLayer": {
+      "surface": "review/authoring console",
+      "files": [
+        ".claude/skills/design-qa/scripts/console/tokens.css",
+        ".claude/skills/design-qa/scripts/console/base.css",
+        ".claude/skills/design-qa/scripts/console/styles.css",
+        ".claude/skills/design-qa/scripts/console/index.html"
+      ],
+      "strategy": "tokens.css + base.css <link>ed ahead of styles.css; styles.css references DesignOS roles directly (no raw hex, no legacy vars). Dark-only default via data-theme=dark; light theme + tweak axes remain reachable by attribute but no user-facing tweak panel ships."
+    },
+    "portableArtifact": {
+      "surface": "exported file:// engineer artifact",
+      "files": [".claude/skills/design-qa/scripts/artifact/build.mjs"],
+      "strategy": "build.mjs concatenates tokens.css + base.css + styles.css into one inlined <style> (same order as the console link chain); mirrors data-theme=dark + the font <link> into the artifact <head>. Portable on file:// — no relative-color, OKLCH only."
+    },
+    "browserFixture": {
+      "surface": "capture overlay injected into the live page",
+      "files": [".claude/skills/design-qa/scripts/overlay/inject.js"],
+      "strategy": "Closed shadow root can't <link>/@import the console stylesheet, so the overlay carries a self-contained, static-OKLCH copy of the dark token set it uses, plus a thin legacy-alias layer (--bg/--text/--border/... → DesignOS roles) so existing rules resolve to tokens. Always dark."
+    }
+  },
+  "adopted": [
+    { "id": "tokens",          "kind": "foundation", "rev": "f7973d", "source": "styles/tokens.css", "as": "console/tokens.css", "fidelity": "verbatim copy" },
+    { "id": "base",            "kind": "foundation", "rev": "f7973d", "source": "styles/base.css",   "as": "console/base.css",   "fidelity": "2 documented deviations (font @import lifted to <head>; 3 relative-color values pre-resolved to static dark --ink OKLCH for file:// portability)" },
+    { "id": "button",          "kind": "atom", "rev": "da75f2", "source": "src/_shared/atoms.jsx", "appliedTo": ".btn / .btn.primary / .btn.active / .tool-btn / modal+confirm buttons", "note": "decisions re-expressed in buildless vanilla CSS, not React" },
+    { "id": "icon-button",     "kind": "atom", "rev": "da75f2", "source": "src/_shared/atoms.jsx", "appliedTo": ".icon-btn / .resolve-btn (circular hover-well)" },
+    { "id": "tag",             "kind": "atom", "rev": "da75f2", "source": "src/_shared/atoms.jsx", "appliedTo": ".cat-chip / .comment-category / .pin-count + .view-pins (Badge)" },
+    { "id": "avatar",          "kind": "atom", "rev": "da75f2", "source": "src/_shared/atoms.jsx", "appliedTo": ".comment-avatar (inset stroke ring; author-identity bg kept — see deviations)" },
+    { "id": "pin",             "kind": "atom", "rev": "da75f2", "source": "src/_shared/atoms.jsx", "appliedTo": ".marker (console) + .pin / .pin-num (overlay): 50% 50% 50% 2px teardrop, accent-ink glyph, shadow-2; resolved = surface-4 + ink-mid" },
+    { "id": "select",          "kind": "atom", "rev": "da75f2", "source": "src/_shared/atoms.jsx", "appliedTo": ".select (recess well + inset stroke ring, --r-control)" },
+    { "id": "list-rows",       "kind": "component", "rev": "f88e1d", "source": "src/app/sidebar.jsx", "appliedTo": "left Screens sidebar: brand row, file header, search, .eyebrow section + add, rich rows (selected=surface-4), + the row 'action' variant (hover ⋯ → Delete screen)" },
+    { "id": "app-frame",       "kind": "layout", "rev": "de1071", "source": "src/app-frame.jsx", "appliedTo": "console shell: NO top bar (actions in panes), three-pane body, identity→left header, Share+presence→right pane; mirrored into artifact/build.mjs" },
+    { "id": "clusters",        "kind": "component", "rev": "a8c5aa", "source": "src/_shared/clusters.jsx", "appliedTo": "Menu/MenuItem → console/ui/menu.mjs (session FileTrigger menu, screen-row Delete menu, comment ⋯ menu); FileTrigger chevron pattern" },
+    { "id": "chrome-primitives","kind": "shared", "rev": null, "source": "src/app/chrome-primitives.jsx", "appliedTo": "Tabs (right-pane Comments|Steps), IconBtn, SectionHeader, AppSwitcher tile (brand mark). Shared file — not a manifest item, no rev." },
+    { "id": "sidebar-panels",  "kind": "component", "rev": "4c85de", "source": "src/app/comments-panel.jsx", "appliedTo": "right Comments pane: in-pane presence+Share action row, search + ⋯ overflow, flat borderless comment cards" },
+    { "id": "sidebar-steps",   "kind": "composite", "rev": null, "source": "src/app/steps-panel.jsx", "appliedTo": "the 'Sidebar Steps' composite (components page → Composites): right-pane PILL tabs (active=surface-4) + the Steps TIMELINE (dot/line rail + NN·action stamp + bold target + meta). Not its own manifest item." },
+    { "id": "comment-states",  "kind": "pattern", "rev": "c9b1c9", "source": "src/browser-widgets.jsx", "appliedTo": "comment card anatomy (avatar-left/body-right, crumb/byline/note + foot category tag + ⋯/resolve) on both surfaces" },
+    { "id": "icons",           "kind": "foundation", "rev": null, "source": "src/icons.jsx (lucide 0.469 map)", "appliedTo": "console/ui/icons.mjs inlines the exact lucide glyphs DesignOS maps (search/plus/check/chevDown/comment(MessageSquare)/more(MoreHorizontal)/trash(Trash2)/filter(ListFilter)/sparkles). Offline-safe; no lucide CDN." },
+    { "id": "browser-fixtures","kind": "pattern", "rev": "c9b1c9", "source": "src/browser-widgets.jsx", "appliedTo": "overlay static-widget styling (panel, popover, composer pill, recording chip, toast)" },
+    { "id": "browser-overlay", "kind": "layout", "rev": "f0ba70", "source": "src/browser-live.jsx", "referenceFor": "the live capture overlay (DesignOS v2 scope item #3). Overlay REBUILD to this draggable mini-toolbar is PLANNED, not yet built — see designos memory / Phase 9 task." }
+  ],
+  "tokenRoleMap": {
+    "_comment": "Legacy design-qa hex vars (formerly in console/styles.css and the overlay shadow root) → DesignOS roles. The console now references roles directly; the overlay keeps these names as an alias layer pointing at the roles.",
+    "--bg": "--surface-1",
+    "--bg-2": "--surface-2",
+    "--bg-3": "--surface-3",
+    "--bg-4": "--surface-4",
+    "--border": "--stroke (fills: --surface-5)",
+    "--border-strong": "--stroke-hi",
+    "--text": "--ink (emphasis: --ink-hi)",
+    "--text-2": "--ink-mid",
+    "--text-3": "--ink-lo",
+    "--accent (#0d99ff)": "--accent (#009cf4, hue 240)",
+    "--accent-hover": "--accent-hi",
+    "--accent-dim": "--accent-tint",
+    "--selected-row": "--row-selected-accent",
+    "--resolved (#3fb950)": "--success",
+    "--resolved-dim": "--success-tint",
+    "--danger (console #f0616d / overlay #f24822)": "--danger (unified)",
+    "#ffffff (pin glyph/ring, CTA text)": "--accent-ink",
+    "rgba(0,0,0,*) shadows": "--shadow-1..4",
+    "raw px radii (3/4/5/6/8/10/12/999)": "--r-1 / --r-2 / --r-control / --r-3 / --r-4 / --r-float / --r-5 / --r-pill",
+    "'Inter' / 'JetBrains Mono' stacks": "--font-sans / --font-mono"
+  },
+  "deviations": [
+    "console/base.css: font @import moved to HTML <head> (an @import is only honored when it leads a stylesheet; the artifact concatenates tokens+base+styles into one <style>).",
+    "console/base.css: the 3 relative-color values oklch(from var(--ink) l c h / A) pre-resolved to static dark --ink oklch(0.86 0.002 250 / A) so the file:// artifact needs no relative-color support.",
+    "overlay/inject.js: carries an inlined static-OKLCH copy of the dark token set + a legacy-alias layer (shadow root can't link the stylesheet); the overlay is always dark and does not honor data-theme/tweak axes.",
+    "Author-avatar palette (console/ui/comments.mjs) kept as 8 fixed data-identity colors (they encode WHO authored a comment, not chrome) rather than DesignOS's single --grad-avatar; the avatar SHAPE/ring adopts the Avatar atom.",
+    "Tweak axes (theme/accent/density/...) are NOT exposed in the QA UI by design (dark-only ship); the token system still supports them by attribute."
+  ],
+  "driftCheck": {
+    "how": "Re-pull DesignOS context/, then compare: source.tokensRev vs _ds_manifest.json.tokensRev; each adopted[].rev vs the matching _ds_manifest.json item's rev. A changed rev means the upstream atom/foundation moved — re-port and bump this lock.",
+    "lastVerifiedAgainst": "_ds_manifest.json @ version v2 / tokensRev f7973d / updated 2026-05-28"
+  }
+}

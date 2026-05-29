@@ -3,6 +3,8 @@ import { createApp, wireControls } from './core.mjs';
 import { setupResizers } from './ui/resizers.mjs';
 import { showToast } from './ui/toast.mjs';
 import { el } from './lib/dom.mjs';
+import { icon } from './ui/icons.mjs';
+import { openMenu } from './ui/menu.mjs';
 
 /**
  * Console bootstrap. The shared engine (core.mjs) owns state + render; this
@@ -149,8 +151,10 @@ function renderConsoleChrome(ctx) {
   const addPin = document.getElementById('addPinBtn');
   if (addPin) {
     addPin.disabled = locked;
-    addPin.classList.toggle('active', ctx.state.placeMode && !locked);
-    addPin.textContent = ctx.state.placeMode && !locked ? '✕ Cancel' : '+ Add pin';
+    const placing = ctx.state.placeMode && !locked;
+    addPin.classList.toggle('active', placing);
+    const label = addPin.querySelector('.cluster-btn-label');
+    if (label) label.textContent = placing ? 'Cancel' : 'Add pin';
   }
 }
 
@@ -161,48 +165,41 @@ function renderConsoleChrome(ctx) {
  * ?session=<basename>`). The lookback view runs in-place on the current port.
  */
 async function setupSwitcher(ctx, store, lookback) {
-  const sel = document.createElement('select');
-  sel.className = 'select';
-  sel.id = 'sessionSwitcher';
-  sel.title = 'Switch session';
-  document.getElementById('sessionName').after(sel);
+  const nameEl = document.getElementById('sessionName');
+  if (!nameEl) return;
 
-  // In lookback mode, "current" from the server's POV is the OWNED session,
-  // not the one we're viewing. Highlight the one whose basename matches the
-  // URL `?session=` instead.
+  // DesignOS FileTrigger: a chevron-down next to the session name; clicking it
+  // opens a DesignOS-style Menu listing every session in the directory. Live
+  // siblings navigate to their own server; ended ones open in-place via the
+  // lookback URL. (Replaces the old <select> switcher.)
+  const btn = el('button', { class: 'file-menu-trigger', id: 'sessionMenuBtn', title: 'Switch session', 'aria-haspopup': 'true' });
+  btn.append(icon('chevDown', 13));
+  nameEl.after(btn);
+
+  // In lookback mode "current" (server POV) is the OWNED session, not the one
+  // being viewed; match the URL `?session=` basename instead.
   const lookbackBase = lookback
     ? new URLSearchParams(window.location.search).get('session')
     : null;
 
-  const fill = async () => {
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
     let sessions = [];
     try { sessions = await store.listSessions(); } catch { return; }
-    sel.replaceChildren(...sessions.map((s) => {
-      const o = document.createElement('option');
-      // Live → that session's own URL. Ended → this server's lookback URL.
-      o.value = s.live ? (s.consoleUrl || '') : (s.lookbackUrl || '');
+    const items = sessions.map((s) => {
       const here = lookback
         ? (s.sessionDir.endsWith(`/${lookbackBase}`) || s.sessionDir.endsWith(`\\${lookbackBase}`))
         : !!s.current;
-      o.dataset.here = String(here);
+      const url = s.live ? (s.consoleUrl || '') : (s.lookbackUrl || '');
       const dot = s.live ? '● ' : (s.endedAt ? '⌛ ' : '');
-      o.textContent = `${dot}${s.name} · ${s.pinCount} pins · ${s.unresolved} open`;
-      if (here) o.selected = true;
-      if (!o.value && !here) o.disabled = true; // no URL to navigate to
-      return o;
-    }));
-  };
-
-  sel.addEventListener('change', () => {
-    const url = sel.value;
-    const opt = sel.selectedOptions[0];
-    if (!opt || opt.dataset.here === 'true') return;
-    if (url) window.location.href = url;
-    else fill(); // not openable — restore selection
+      return {
+        label: `${dot}${s.name} · ${s.pinCount} pins · ${s.unresolved} open`,
+        checked: here,
+        onClick: () => { if (!here && url) window.location.href = url; },
+      };
+    });
+    openMenu(btn, items, { align: 'left', width: 268 });
   });
-
-  await fill();
-  store.subscribe(() => { fill(); }); // refresh counts/live state on changes
 }
 
 /**

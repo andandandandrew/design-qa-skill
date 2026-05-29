@@ -44,6 +44,7 @@ const CONSOLE_OPS = {
   updatePin: 'editPin',
   resolvePin: 'resolvePin',
   deletePin: 'deletePin',
+  deleteView: 'deleteView', // remove a screen + all its pins (guarded: not a live unsealed screen)
   // Spike 8 / 9d — recorder step authoring.
   // editStepText overrides the human-readable label only (code stays
   // authoritative). omitStep / unomitStep toggle the step's `omitted` flag.
@@ -59,6 +60,8 @@ const CONSOLE_OPS = {
  *  may live in any view OR in preconditionSteps. The ownership guard doesn't
  *  apply (no live-browser-owned screens hold authored step text). */
 const STEP_OPS = new Set(['editStepText', 'omitStep', 'unomitStep', 'setRecordingStartAt']);
+// Ops keyed by viewId (not pinId) — resolved via findViewById for the guard.
+const VIEW_ID_OPS = new Set(['createPin', 'deleteView']);
 
 export async function startHttpServer(store, { sessionDir, consoleDir, log = () => {} }) {
   const subs = sessionSubPaths(sessionDir);
@@ -260,7 +263,7 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
     // guard is skipped for them entirely.
     const view = STEP_OPS.has(op)
       ? null
-      : op === 'createPin'
+      : VIEW_ID_OPS.has(op)
         ? target.findViewById(args.viewId)
         : target.findPin(args.pinId).view;
     try {

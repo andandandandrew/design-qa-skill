@@ -2,24 +2,38 @@
  * design-qa overlay. Injected via Playwright addInitScript into every frame.
  * Only activates in the top frame.
  *
+ * Phase-8 form-factor rebuild (DesignOS `src/browser-live.jsx`): the authoring
+ * chrome is a single draggable bottom-center MINI-TOOLBAR pill —
+ *   grip ┃ comment  ＋ ┃ ● record ▾ · Done
+ * — plus a separate top-center RECORDING INDICATOR (pulse + "Recording" + N
+ * steps) that expands into a steps timeline. The old top-right collapsible
+ * inspector (screens + pins lists) is gone: review happens in the console now.
+ * Pins themselves stay fully interactive on the page (click → edit / drag /
+ * delete in place).
+ *
  * Shadow DOM layout:
  *   .pin-layer    — pin markers in document coordinates. Hidden during
  *                   screenshots (pins are overlaid programmatically in the
  *                   artifact, not baked into the PNG).
- *   .chrome       — UI surface (panel, popovers, modals, toasts). Hidden
- *                   during screenshots via opacity:0; isolated by closed
- *                   shadow root.
+ *   .chrome       — UI surface (toolbar, menus, indicator, composer, modals,
+ *                   toasts). Hidden during screenshots via opacity:0; isolated
+ *                   by a closed shadow root.
  *
- * Visual style matches Figma dark mode: neutral grays, blue accent, comment-
- * bubble pin shape.
+ * Visual style = DesignOS v2 dark tokens, inlined (a closed shadow root can't
+ * <link> the console stylesheet). Provenance in designos.lock.json.
  *
- * Daemon bindings on window:
+ * Daemon bindings on window (all preserved from Spike 8):
  *   __designQA_loadForUrl, __designQA_ensureView, __designQA_createPin,
  *   __designQA_updatePin (note OR x/y), __designQA_deletePin,
- *   __designQA_renameView, __designQA_deleteView, __designQA_startNewView,
- *   __designQA_sealCurrentView, __designQA_navigateTo, __designQA_listSession
+ *   __designQA_startNewView, __designQA_sealCurrentView,
+ *   __designQA_markStart, __designQA_stopRecording (= finalize-keep),
+ *   __designQA_discardRecording, __designQA_fetchRecorderSteps,
+ *   __designQA_getUiState / __designQA_setUiState (toolbarPos +
+ *   recIndicatorExpanded). The daemon also still exposes renameView/deleteView/
+ *   navigateTo/listSession for the console; the overlay no longer calls them.
  *
- * Daemon-callable: window.__designQA.setChromeVisible(bool)
+ * Node → shadow push: window.__designQA_setRecorderState({active,count,…}).
+ * Daemon-callable: window.__designQA.setChromeVisible(bool).
  *
  * Terminology: internal data uses "view". UI says "Screen".
  */
@@ -33,20 +47,31 @@
     pins: [],
     activePinId: null,
     placementMode: false,
-    inspectorExpanded: false,
-    selectedInspectorViewId: null,
-    session: { sessionName: '', activeViewId: null, views: [] },
-    // Spike 8: recorder state pushed from Node via window.__designQA_setRecorderState.
-    // `active` flips when Mark-start fires; `count` is total post-Mark-start steps
-    // across all views; `startedAtMs` is the Node-side wall clock at Mark-start
-    // (popover computes elapsed from it).
+    // Spike 8: recorder state pushed from Node via __designQA_setRecorderState.
+    // `active` flips at Mark-start; `count` is total post-Mark-start steps
+    // across all views; `startedAtMs` is the Node wall clock at Mark-start;
+    // `redactionCount` surfaces how many captured field values were redacted.
     recorder: { active: false, count: 0, startedAtMs: null, redactionCount: 0 },
-    // Cross-nav restore intent for the recording popover. The boot path may
-    // request "open the popover if recording is active" before the Node→shadow
-    // state push has landed (active is still false on the fresh page). When
-    // the push arrives with active=true, the setter re-checks this flag and
-    // opens the popover then. Cleared on first successful open.
-    pendingPopoverRestore: false,
+    // Toolbar drag position (viewport coords) — null = default bottom-center.
+    toolbarPos: null,
+    dragging: false,
+    // top-indicator expanded (persists Node-side so it survives navigation;
+    // render reads it whenever recording is active). `editing` = an existing
+    // pin's popover is showing the edit card (vs the default read-only card).
+    recIndicatorExpanded: false,
+    editing: false,
+  };
+
+  // DesignOS canonical comment categories (app.jsx COMMENT_CATEGORIES). Inlined
+  // here because the injected script can't import the console modules; kept in
+  // lockstep with console/core.mjs + comments.mjs. Single source of truth for
+  // the category palette the browser composer / edit card tag with.
+  const COMMENT_CATEGORIES = {
+    visual:   { label: 'Visual',   color: 'oklch(0.72 0.18 295)' },
+    copy:     { label: 'Copy',     color: 'oklch(0.70 0.14 230)' },
+    spec:     { label: 'Spec',     color: 'oklch(0.72 0.16 152)' },
+    question: { label: 'Question', color: 'oklch(0.78 0.16 80)' },
+    bug:      { label: 'Bug',      color: 'oklch(0.65 0.20 25)' },
   };
 
   const TEMP_PREFIX = '__temp_';
@@ -64,33 +89,51 @@
   style.textContent = `
     :host, * { box-sizing: border-box; }
     .root {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 12px; line-height: 1.4; color: #eeeeee;
-      --bg: #1e1e1e; --bg-2: #2c2c2c; --bg-3: #383838; --bg-4: #444444;
-      --border: #3d3d3d; --border-strong: #555555;
-      --text: #eeeeee; --text-2: #a0a0a0; --text-3: #757575;
-      --accent: #0d99ff; --accent-hover: #1fa9ff; --accent-dim: rgba(13,153,255,0.16);
-      --danger: #f24822;
+      /* DesignOS v2 tokens (dark · cool · default), inlined as static OKLCH.
+         The closed shadow root can't <link>/@import the console stylesheet, so
+         the browser fixture carries a self-contained copy of the token set it
+         uses; the overlay is always dark. Provenance in designos.lock.json. */
+      --surface-0: oklch(0.20 0.002 250); --surface-1: oklch(0.24 0.002 250);
+      --surface-2: oklch(0.28 0.002 250); --surface-3: oklch(0.32 0.002 250);
+      --surface-4: oklch(0.38 0.002 250); --surface-5: oklch(0.46 0.002 250);
+      --surface-overlay: oklch(0.27 0.002 250 / 0.98);
+      --ink-hi: oklch(0.97 0.001 250); --ink: oklch(0.86 0.002 250);
+      --ink-mid: oklch(0.66 0.003 250); --ink-lo: oklch(0.52 0.004 250);
+      --stroke-soft: oklch(1 0 0 / 0.06); --stroke: oklch(1 0 0 / 0.10); --stroke-hi: oklch(1 0 0 / 0.16);
+      --recess: oklch(0.16 0.002 250);
+      --accent-h: 240;
+      --accent: oklch(0.66 0.18 240); --accent-hi: oklch(0.74 0.16 240);
+      --accent-ink: oklch(0.99 0.01 240); --accent-tint: oklch(0.66 0.18 240 / 0.16); --accent-glow: oklch(0.66 0.18 240 / 0.35);
+      --danger: oklch(0.65 0.20 25); --danger-hi: oklch(0.70 0.20 25); --danger-tint: oklch(0.65 0.20 25 / 0.16);
+      --success: oklch(0.72 0.16 152);
+      --shadow-1: 0 1px 2px oklch(0 0 0 / 0.40);
+      --shadow-2: 0 2px 6px oklch(0 0 0 / 0.35), 0 1px 2px oklch(0 0 0 / 0.40);
+      --shadow-3: 0 8px 24px oklch(0 0 0 / 0.45), 0 2px 6px oklch(0 0 0 / 0.40);
+      --shadow-4: 0 20px 50px oklch(0 0 0 / 0.55), 0 6px 14px oklch(0 0 0 / 0.40);
+      --r-1: 2px; --r-2: 4px; --r-control: 5px; --r-3: 6px; --r-4: 8px; --r-float: 10px; --r-5: 12px; --r-pill: 999px;
+      --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      font-family: var(--font-sans);
+      font-size: 12px; line-height: 1.4; color: var(--ink);
     }
-    .mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-feature-settings: 'tnum'; }
 
     /* Pin layer */
     .pin-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
     .pin {
       position: absolute; width: 24px; height: 24px;
-      background: var(--accent); color: #ffffff;
-      border-radius: 100% 100% 100% 0;            /* tail at bottom-left */
-      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--accent); color: var(--accent-ink);
+      border-radius: 50% 50% 50% 2px;            /* tail at bottom-left */
+      font-family: var(--font-sans);
       font-size: 10px; font-weight: 700;
       display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 0 0 1.5px #ffffff;
+      box-shadow: var(--shadow-2), 0 0 0 1.5px var(--accent-ink);
       pointer-events: auto; cursor: pointer; user-select: none;
       transition: transform 0.1s, box-shadow 0.1s;
       touch-action: none;                          /* enable pointer drag */
     }
     .pin > span { transform: translate(1px, -1px); }   /* nudge number into the bubble center */
-    .pin:hover { background: var(--accent-hover); transform: translate(0, -1px); }
-    .pin.active { background: var(--accent-hover); box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #ffffff, 0 0 0 4px rgba(13,153,255,0.35); }
+    .pin:hover { background: var(--accent-hi); transform: translate(0, -1px); }
+    .pin.active { background: var(--accent-hi); box-shadow: var(--shadow-2), 0 0 0 1.5px var(--accent-ink), 0 0 0 4px var(--accent-glow); }
     .pin.dragging { transition: none; cursor: grabbing; }
 
     /* Chrome — hidden during screenshots (opacity preserves focus) */
@@ -102,354 +145,315 @@
       transition: none !important; animation: none !important; pointer-events: none !important;
     }
 
-    .placement-cursor { position: fixed; inset: 0; pointer-events: auto; cursor: crosshair; background: transparent; }
+    /* Placement / comment mode: a full-screen catch layer that doubles as the
+       focus-dimming veil (DesignOS browser-live dims while in a mode). */
+    .placement-cursor {
+      position: fixed; inset: 0; pointer-events: auto; cursor: crosshair;
+      background: oklch(0.15 0.01 250 / 0.18);
+    }
 
-    /* Toolbar (collapsed state — minimal Figma-style) */
-    .panel {
-      position: fixed; top: 12px; right: 12px;
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      pointer-events: auto; overflow: hidden;
-      max-height: calc(100vh - 24px); display: flex; flex-direction: column;
-      min-width: 0;
+    /* ── Mini-toolbar pill (top-center by default, draggable) ─────────── */
+    .toolbar {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+      display: inline-flex; align-items: center; height: 40px; padding: 6px; gap: 4px;
+      background: var(--surface-1); color: var(--ink-hi);
+      border-radius: var(--r-float);
+      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
+      pointer-events: auto; user-select: none; white-space: nowrap;
+      width: max-content; z-index: 50; font-family: var(--font-sans);
     }
-    .panel.collapsed { width: auto; }
-    /* Bumped from 280→360 in 9c so the Mark-start / Recording chip + chevron
-       both fit in the verb bar without overflow:hidden clipping the chevron.
-       The body (screens + pins lists) still reads well at this width. */
-    .panel:not(.collapsed) { width: 360px; }
-    .panel.collapsed .panel-body { display: none; }
-    .panel.collapsed .panel-header { border-bottom: none; }
-
-    .panel-header {
-      display: flex; gap: 2px; align-items: center;
-      padding: 4px; border-bottom: 1px solid var(--border);
-    }
-    /* Chevron is the always-clickable affordance — never let it shrink or wrap
-       out of view when the verb bar grows (e.g. when Mark-start becomes the
-       wider Recording · N chip). */
-    .panel-header .icon-btn { flex-shrink: 0; }
-    /* Done is the session-level wrap-up (9f, relabelled from "Save") — pushed to
-       the right edge of the verb bar (just before the chevron) and rendered as a
-       SOLID accent-filled CTA at all times (text white, fill blue). 9c-feedback-2:
-       the opaque variant — fill takes the color that the text used to be. The
-       confirm-bar below the verb bar is the primary signal that Done was clicked;
-       the chip darkens slightly on hover/active but never loses its solid look. */
-    .tool-btn.done-cta {
-      margin-left: auto;
-      background: var(--accent);
-      color: #ffffff;
-      font-weight: 600;
-    }
-    .tool-btn.done-cta:hover { background: var(--accent-hover); color: #ffffff; }
-    .tool-btn.done-cta.active,
-    .tool-btn.done-cta.active:hover { background: var(--accent-hover); color: #ffffff; }
-    /* Always-visible labeled verbs (Comment / New / Record / Done). */
-    .tool-btn {
-      all: unset; cursor: pointer;
-      display: inline-flex; align-items: center; gap: 5px;
-      padding: 5px 9px; border-radius: 4px;
-      color: var(--text-2); font-size: 11px; font-weight: 500;
-      transition: background 0.08s, color 0.08s;
-    }
-    .tool-btn:hover { background: var(--bg-3); color: var(--text); }
-    .tool-btn.active { background: var(--accent); color: #ffffff; }
-    .tool-btn.active:hover { background: var(--accent-hover); }
-    .tool-btn .tb-ic { display: inline-flex; }
-    .tool-btn svg { width: 13px; height: 13px; display: block; }
-    .icon-btn {
-      all: unset; cursor: pointer;
+    .tb-grip {
+      width: 16px; height: 28px; flex-shrink: 0;
       display: inline-flex; align-items: center; justify-content: center;
-      width: 28px; height: 28px; border-radius: 4px;
-      color: var(--text-2); transition: background 0.08s, color 0.08s;
+      color: var(--ink-lo); cursor: grab; touch-action: none;
     }
-    /* Toggle sits at the far right of the verb bar. */
-    .panel-header .icon-btn { margin-left: auto; }
-    .icon-btn:hover { background: var(--bg-3); color: var(--text); }
-    .icon-btn.active { background: var(--accent); color: #ffffff; }
-    .icon-btn.active:hover { background: var(--accent-hover); }
-    .icon-btn svg { width: 14px; height: 14px; display: block; }
+    .toolbar.dragging, .toolbar.dragging .tb-grip { cursor: grabbing; }
+    .tb-grip svg { width: 14px; height: 18px; display: block; }
+    .tb-divider { width: 1px; height: 18px; background: var(--stroke-soft); margin: 0 4px; flex-shrink: 0; }
+    .tb-cluster { display: inline-flex; align-items: center; gap: 2px; }
+    .tb-rec-wrap { position: relative; display: inline-flex; align-items: center; }
 
-    /* Inline confirm for the one-way Done (native confirm() can't be used —
-       Playwright auto-dismisses it). Shows below the verb bar in either state. */
-    .confirm-bar { padding: 9px 11px; border-bottom: 1px solid var(--border); background: var(--bg); }
-    .confirm-bar[hidden] { display: none; }
-    .confirm-msg { color: var(--text); font-size: 11px; line-height: 1.45; margin-bottom: 8px; max-width: 230px; }
-    .confirm-actions { display: flex; gap: 6px; justify-content: flex-end; }
-    .confirm-cancel, .confirm-ok {
-      all: unset; cursor: pointer; font-size: 11px; font-weight: 500;
-      padding: 4px 11px; border-radius: 4px;
+    .tb-ibtn {
+      width: 28px; height: 28px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--ink-mid); border-radius: var(--r-control); cursor: pointer;
+      transition: background 0.09s, color 0.09s;
     }
-    .confirm-cancel { color: var(--text-2); }
-    .confirm-cancel:hover { background: var(--bg-3); color: var(--text); }
-    .confirm-ok { background: var(--accent); color: #ffffff; }
-    .confirm-ok:hover { background: var(--accent-hover); }
+    .tb-ibtn:hover { background: var(--surface-3); color: var(--ink-hi); }
+    .tb-ibtn.active { background: var(--accent); color: var(--accent-ink); }
+    .tb-ibtn svg { width: 16px; height: 16px; display: block; }
 
-    .panel-body { overflow-y: auto; }
+    /* Record button — idle = filled red dot, recording = filled dot with a
+       pulsing halo. Plain start/stop toggle (no secondary ▾ menu). */
+    .tb-rec {
+      width: 30px; height: 28px;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--danger-tint); color: var(--danger);
+      border-radius: var(--r-control); cursor: pointer; transition: background 0.09s;
+    }
+    .tb-rec:hover { background: oklch(0.65 0.20 25 / 0.26); }
+    .rec-glyph { display: block; box-sizing: border-box; }
+    .rec-glyph.idle { width: 11px; height: 11px; border-radius: 50%; background: var(--danger); }
+    .rec-glyph.live {
+      width: 10px; height: 10px; border-radius: 50%; background: var(--danger);
+      animation: rec-halo 1.4s ease-in-out infinite;
+    }
+    @keyframes rec-halo {
+      0%, 100% { box-shadow: 0 0 0 0 oklch(0.65 0.20 25 / 0.5); }
+      50% { box-shadow: 0 0 0 5px oklch(0.65 0.20 25 / 0); }
+    }
+    .tb-done {
+      all: unset; cursor: pointer; height: 28px; padding: 0 12px;
+      display: inline-flex; align-items: center;
+      background: var(--accent); color: var(--accent-ink);
+      font-size: 12px; font-weight: 600; border-radius: var(--r-control);
+    }
+    .tb-done:hover { background: var(--accent-hi); }
 
-    .section { padding: 8px 0; border-bottom: 1px solid var(--border); }
-    .section:last-child { border-bottom: none; }
-    .section-header {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 4px 12px 6px;
+    /* ── Top recording indicator (collapsed pill + expandable step list) ─ */
+    /* Sits below the default top-center toolbar (top:16px + 40px tall) so the
+       two don't collide when the toolbar is left in its default spot. */
+    .rec-indicator {
+      position: fixed; top: 64px; left: 50%; transform: translateX(-50%);
+      pointer-events: auto; z-index: 55;
+      display: flex; flex-direction: column; align-items: center;
+      font-family: var(--font-sans);
     }
-    .section-title {
-      font-size: 11px; font-weight: 600; color: var(--text-2);
-      letter-spacing: 0.02em;
+    .rec-ind-pill {
+      display: inline-flex; align-items: center; gap: 9px; height: 32px; padding: 0 10px 0 12px;
+      background: var(--surface-1); color: var(--ink-hi);
+      border-radius: var(--r-pill);
+      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
+      cursor: pointer;
     }
+    .rec-ind-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--danger);
+      box-shadow: 0 0 0 4px oklch(0.65 0.20 25 / 0.20);
+      animation: rec-pulse 1.4s ease-in-out infinite; flex-shrink: 0;
+    }
+    @keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+    .rec-ind-label { font-size: 12px; font-weight: 600; color: var(--ink-hi); }
+    .rec-ind-count { font-size: 11px; color: var(--ink-mid); }
+    .rec-ind-chev { display: inline-flex; align-items: center; color: var(--ink-mid); }
+    .rec-ind-chev svg { width: 12px; height: 12px; display: block; transition: transform 0.14s; }
+    .rec-indicator.expanded .rec-ind-chev svg { transform: rotate(180deg); }
 
-    .empty { padding: 8px 12px; color: var(--text-3); font-size: 11px; }
+    .rec-ind-panel {
+      margin-top: 6px; width: 324px; max-height: 52vh;
+      display: flex; flex-direction: column;
+      background: var(--surface-1); color: var(--ink);
+      border-radius: var(--r-4);
+      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
+      overflow: hidden;
+    }
+    .rec-ind-panel-head {
+      display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+      border-bottom: 1px solid var(--stroke-soft);
+    }
+    .rec-ind-panel-title { font-size: 12px; font-weight: 600; color: var(--ink-hi); flex: 1; }
+    .rec-redact-chip {
+      padding: 1px 7px; border-radius: var(--r-pill);
+      font-size: 10px; background: var(--accent-tint); color: var(--accent-hi); font-weight: 600;
+    }
+    /* Discard recording — lives with the recording, not the start trigger. */
+    .rec-ind-discard {
+      all: unset; cursor: pointer; margin-left: 8px;
+      width: 24px; height: 24px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--ink-mid); border-radius: var(--r-2);
+    }
+    .rec-ind-discard:hover { background: var(--danger-tint); color: var(--danger); }
+    .rec-ind-discard svg { width: 14px; height: 14px; display: block; }
+    .rec-ind-list { overflow-y: auto; padding: 2px 12px 12px; }
+    .rec-ind-empty { padding: 30px 12px; text-align: center; color: var(--ink-lo); font-size: 12px; }
 
-    /* Screens list */
-    .view-list .view-item {
-      padding: 6px 12px; cursor: pointer; position: relative;
-      transition: background 0.08s;
+    /* Steps timeline — DesignOS "Sidebar Steps" composite (steps-panel.jsx). */
+    .step-tile { display: flex; gap: 10px; padding: 0 4px; position: relative; }
+    .step-rail { flex-shrink: 0; width: 10px; display: flex; flex-direction: column; align-items: center; position: relative; }
+    .step-dot {
+      width: 8px; height: 8px; border-radius: 50%; background: var(--surface-4);
+      box-shadow: inset 0 0 0 1px var(--stroke); margin-top: 10px; z-index: 1; position: relative;
     }
-    .view-list .view-item:hover { background: var(--bg-3); }
-    .view-list .view-item.selected { background: var(--accent-dim); }
+    .step-line { position: absolute; top: 18px; bottom: -2px; left: 50%; width: 1px; transform: translateX(-50%); background: var(--stroke-soft); }
+    .step-body { flex: 1; min-width: 0; padding: 8px 0 6px; display: flex; flex-direction: column; gap: 3px; }
+    .step-stamp { display: flex; align-items: baseline; gap: 6px; font-size: 11px; color: var(--ink-lo); line-height: 1.2; }
+    .step-stamp-num { color: var(--ink-mid); font-weight: 500; font-variant-numeric: tabular-nums; }
+    .step-stamp-div { color: var(--ink-lo); opacity: 0.6; }
+    .step-stamp-action { color: var(--ink-mid); }
+    .step-target { font-size: 13px; color: var(--ink-hi); font-weight: 600; line-height: 1.35; word-break: break-word; }
+    .step-target strong { font-weight: 700; }
+    .step-target code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); padding: 0 4px; border-radius: var(--r-1); }
 
-    .view-row { display: flex; align-items: center; gap: 8px; min-width: 0; }
-    .view-name {
-      font-size: 12px; color: var(--text); font-weight: 500;
-      flex: 1; min-width: 0;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .view-pins {
-      flex-shrink: 0;
-      font-size: 10px; font-weight: 600; color: var(--text-2);
-      background: var(--bg-3); border: 1px solid var(--border);
-      padding: 1px 6px; border-radius: 999px;
-      font-family: 'JetBrains Mono', monospace;
-    }
-    .view-item.active .view-pins { background: var(--accent); color: #ffffff; border-color: transparent; }
-    .view-url {
-      font-size: 10px; color: var(--text-3); margin-top: 2px;
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    }
-    .view-actions {
-      display: flex; gap: 4px; margin-top: 6px;
-      opacity: 0; transition: opacity 0.08s;
-    }
-    .view-item:hover .view-actions, .view-item:focus-within .view-actions { opacity: 1; }
-    .view-actions button {
-      all: unset; cursor: pointer; font-size: 10px;
-      padding: 2px 6px; border-radius: 3px;
-      color: var(--text-2);
-    }
-    .view-actions button:hover { color: var(--text); background: var(--bg-4); }
-    .view-actions button.danger { color: var(--text-2); }
-    .view-actions button.danger:hover { color: var(--danger); background: rgba(242,72,34,0.1); }
-
-    .view-rename-input {
-      all: unset; flex: 1; min-width: 0;
-      font-size: 12px; color: var(--text); font-weight: 500;
-      background: var(--bg); border: 1px solid var(--accent); border-radius: 3px;
-      padding: 2px 6px;
-    }
-
-    /* Pins list */
-    .pin-list .pin-row {
-      padding: 6px 12px; display: flex; gap: 8px; align-items: flex-start;
-      cursor: pointer; transition: background 0.08s;
-    }
-    .pin-list .pin-row:hover { background: var(--bg-3); }
-    .pin-list .pin-row.active { background: var(--accent-dim); }
-    .pin-num {
-      width: 16px; height: 16px; flex-shrink: 0;
-      background: var(--accent); color: #ffffff;
-      border-radius: 100% 100% 100% 0;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 9px; font-weight: 700;
-      display: flex; align-items: center; justify-content: center;
-      margin-top: 1px;
-    }
-    .pin-note {
-      font-size: 12px; color: var(--text); line-height: 1.4;
-      white-space: pre-wrap; word-break: break-word;
-    }
-    .pin-note.empty { color: var(--text-3); font-style: italic; }
-
-    /* Popover (Figma comment composer) */
+    /* ── Comment cards (composer / read / edit) — DesignOS browser-widgets ─ */
     .popover-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
-    .popover {
-      position: absolute; width: 340px;
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;
-      pointer-events: auto; overflow: hidden;
-      box-shadow: 0 12px 32px rgba(0,0,0,0.55);
-      transform: translate(-50%, 24px);
+    .cmt-card {
+      position: absolute;
+      background: var(--surface-1); color: var(--ink-hi);
+      border-radius: var(--r-5);
+      box-shadow: var(--shadow-4), inset 0 0 0 1px var(--stroke-soft);
+      pointer-events: auto; font-family: var(--font-sans);
+      transform: translate(22px, -10px);   /* sit to the right of the pin */
     }
-    .popover textarea {
-      all: unset; box-sizing: border-box;
-      display: block; width: 100%; min-height: 44px; max-height: 200px;
-      font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--text);
-      background: transparent; padding: 12px 16px; resize: none;
+    .cmt-card.composer { width: 320px; padding: 12px 14px; }
+    .cmt-card.read { width: 300px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+    .cmt-card.edit { width: 340px; }
+
+    .cmt-field {
+      all: unset; box-sizing: border-box; display: block; width: 100%;
+      font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--ink-hi);
+      background: transparent; resize: none; overflow: hidden;
+      min-height: 20px; max-height: 200px;
     }
-    .popover textarea::placeholder { color: var(--text-3); }
-    .popover .actions {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 6px 8px 6px 8px;
-      border-top: 1px solid var(--border);
+    .cmt-field::placeholder { color: var(--ink-lo); }
+
+    /* Footer action bar — appears once there's ≥1 char (composer) / always (edit). */
+    .cmt-bar { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+    .cmt-bar.hidden { display: none; }
+    .bar-spacer { flex: 1; }
+
+    /* Read-only card */
+    .cmt-head { display: flex; align-items: baseline; gap: 8px; }
+    .cmt-author { font-size: 13px; font-weight: 600; color: var(--ink-hi); }
+    .cmt-time { font-size: 12px; color: var(--ink-lo); flex: 1; }
+    .cmt-resolved-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 10px; color: var(--ink-lo); background: var(--surface-2);
+      padding: 2px 6px 2px 4px; border-radius: var(--r-1);
     }
-    .popover .actions-left { display: flex; gap: 2px; }
-    .popover button.text-btn {
-      all: unset; cursor: pointer; font-size: 12px;
-      color: var(--text-2); padding: 6px 10px; border-radius: 4px;
+    .cmt-resolved-badge svg { width: 9px; height: 9px; }
+    .cmt-read-body { font-size: 13px; color: var(--ink-hi); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .cmt-card.read.resolved .cmt-read-body { color: var(--ink-lo); }
+    .cmt-tag-row { display: flex; align-items: center; margin-top: 2px; }
+
+    /* Edit card */
+    .cmt-edit-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; }
+    .cmt-edit-title { font-size: 13px; font-weight: 600; color: var(--ink-hi); flex: 1; }
+    .cmt-edit-divider { height: 1px; background: var(--stroke-soft); }
+    .cmt-edit-inset {
+      margin: 12px; background: var(--surface-2); border-radius: var(--r-4);
+      padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;
     }
-    .popover button.text-btn:hover { color: var(--text); background: var(--bg-3); }
-    .popover button.text-btn.danger { color: var(--text-2); }
-    .popover button.text-btn.danger:hover { color: var(--danger); background: rgba(242,72,34,0.1); }
+    .cmt-edit-inset .cmt-bar { margin-top: 0; }
+    .cmt-cancel {
+      all: unset; cursor: pointer; height: 24px; padding: 0 10px;
+      display: inline-flex; align-items: center; color: var(--ink-hi);
+      font-size: 12px; font-weight: 500; border-radius: var(--r-2);
+    }
+    .cmt-cancel:hover { background: var(--surface-3); }
+    .cmt-save {
+      all: unset; cursor: pointer; height: 24px; padding: 0 12px;
+      display: inline-flex; align-items: center;
+      background: var(--accent); color: var(--accent-ink);
+      font-size: 12px; font-weight: 600; border-radius: var(--r-2);
+    }
+    .cmt-save:hover { background: var(--accent-hi); }
+
+    /* Small icon buttons inside card heads */
+    .cmt-icon-btn {
+      all: unset; cursor: pointer; width: 24px; height: 24px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--ink-mid); border-radius: var(--r-2);
+    }
+    .cmt-icon-btn:hover { background: var(--surface-3); color: var(--ink-hi); }
+    .cmt-icon-btn.danger:hover { background: var(--danger-tint); color: var(--danger); }
+    .cmt-icon-btn svg { width: 14px; height: 14px; display: block; }
+
+    /* ··· read-card overflow menu (Edit / Delete) */
+    .cmt-menu {
+      position: absolute; top: 36px; right: 10px; min-width: 144px; padding: 4px;
+      background: var(--surface-overlay); border-radius: var(--r-4);
+      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
+      backdrop-filter: blur(8px);
+      display: flex; flex-direction: column; gap: 1px; z-index: 5;
+    }
+    .cmt-menu-item { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border-radius: var(--r-control); cursor: pointer; color: var(--ink-hi); font-size: 12px; }
+    .cmt-menu-item:hover { background: var(--surface-3); }
+    .cmt-menu-item.danger { color: var(--danger); }
+    .cmt-menu-item.danger:hover { background: var(--danger-tint); }
+    .cmt-menu-item .mi-ic { width: 16px; display: inline-flex; justify-content: center; color: var(--ink-mid); }
+    .cmt-menu-item.danger .mi-ic { color: var(--danger); }
+    .cmt-menu-item svg { width: 14px; height: 14px; display: block; }
+
+    /* Circular send button (composer) */
     button.send-btn {
       all: unset; cursor: pointer;
-      width: 28px; height: 28px; border-radius: 50%;
+      width: 28px; height: 28px; border-radius: var(--r-pill);
       display: inline-flex; align-items: center; justify-content: center;
-      background: var(--bg-3); color: var(--text-3);
+      background: var(--surface-3); color: var(--ink-lo);
       transition: background 0.1s, color 0.1s;
     }
-    button.send-btn:hover:not([aria-disabled="true"]) { background: var(--accent-hover); }
-    button.send-btn.active { background: var(--accent); color: #ffffff; }
-    button.send-btn.active:hover { background: var(--accent-hover); }
+    button.send-btn:hover:not([aria-disabled="true"]) { background: var(--accent-hi); }
+    button.send-btn.active { background: var(--accent); color: var(--accent-ink); }
+    button.send-btn.active:hover { background: var(--accent-hi); }
     button.send-btn[aria-disabled="true"] { cursor: not-allowed; }
     button.send-btn svg { width: 14px; height: 14px; display: block; }
 
-    /* New-comment composer pill (single-line) */
-    .composer-pill {
-      position: absolute; width: 320px;
-      display: flex; align-items: center; gap: 6px;
-      background: var(--bg-3); border: 1px solid var(--border); border-radius: 999px;
-      padding: 4px 4px 4px 16px;
-      pointer-events: auto;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-      transform: translate(16px, -50%);
+    /* Category control — chip (chosen) / add button (invite) / picker dropdown */
+    .cat-control { position: relative; display: inline-flex; align-items: center; }
+    .cat-add {
+      display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px 0 5px;
+      color: var(--ink-mid); font-size: 11px; font-weight: 500; border-radius: var(--r-2); cursor: pointer;
     }
-    .composer-pill .pill-input {
-      all: unset; box-sizing: border-box; flex: 1; min-width: 0;
-      font-family: inherit; font-size: 13px; line-height: 1.4; color: var(--text);
-      background: transparent; padding: 6px 0;
+    .cat-add:hover, .cat-add.open { background: var(--surface-3); color: var(--ink-hi); }
+    .cat-add svg { width: 11px; height: 11px; display: block; }
+    .cat-chip {
+      display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 7px;
+      background: var(--surface-3); color: var(--ink-hi); font-size: 11px; font-weight: 500;
+      border-radius: var(--r-2); cursor: pointer; white-space: nowrap;
     }
-    .composer-pill .pill-input::placeholder { color: var(--text-3); }
+    .cat-chip-x { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-mid); border-radius: var(--r-1); }
+    .cat-chip-x:hover { color: var(--ink-hi); background: var(--surface-4); }
+    .cat-chip-x svg { width: 10px; height: 10px; display: block; }
+    .cat-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .cat-picker {
+      position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 168px; padding: 4px;
+      background: var(--surface-overlay); border-radius: var(--r-4);
+      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft); backdrop-filter: blur(8px);
+      display: flex; flex-direction: column; gap: 1px; z-index: 8;
+    }
+    .cat-picker-head { font-size: 10px; color: var(--ink-lo); text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 8px 2px; }
+    .cat-picker-item { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border-radius: var(--r-control); cursor: pointer; color: var(--ink-hi); }
+    .cat-picker-item:hover, .cat-picker-item.active { background: var(--surface-3); }
+    .cat-picker-item .cat-picker-label { flex: 1; }
+    .cat-picker-item svg { width: 11px; height: 11px; display: block; }
 
-    /* Modal */
+    /* Modal (Done / Discard confirms — native confirm() is auto-dismissed by
+       Playwright, so we use a shadow-DOM modal). */
     .modal-layer { position: fixed; inset: 0; pointer-events: none; }
     .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+      position: fixed; inset: 0; background: oklch(0 0 0 / 0.5);
       pointer-events: auto; display: flex; align-items: center; justify-content: center;
       padding: 24px;
     }
     .modal {
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 12px 48px rgba(0,0,0,0.6);
-      min-width: 320px; max-width: 440px;
-      padding: 20px;
+      background: var(--surface-2); border: 1px solid var(--stroke); border-radius: var(--r-4);
+      box-shadow: var(--shadow-4);
+      min-width: 320px; max-width: 440px; padding: 20px;
     }
-    .modal-title { font-size: 14px; font-weight: 600; color: var(--text); margin-bottom: 6px; }
-    .modal-body { font-size: 12px; color: var(--text-2); line-height: 1.5; margin-bottom: 18px; }
+    .modal-title { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 6px; }
+    .modal-body { font-size: 12px; color: var(--ink-mid); line-height: 1.5; margin-bottom: 18px; }
     .modal-actions { display: flex; justify-content: flex-end; gap: 6px; }
     .modal button {
       all: unset; cursor: pointer; padding: 6px 14px;
-      border-radius: 4px; font-size: 12px; font-weight: 500;
+      border-radius: var(--r-2); font-size: 12px; font-weight: 500;
     }
-    .modal button.ghost { color: var(--text-2); }
-    .modal button.ghost:hover { color: var(--text); background: var(--bg-3); }
-    .modal button.danger { background: var(--danger); color: #ffffff; font-weight: 600; }
-    .modal button.danger:hover { background: #d63d1e; }
-    .modal button.primary { background: var(--accent); color: #ffffff; font-weight: 600; }
-    .modal button.primary:hover { background: var(--accent-hover); }
+    .modal button.ghost { color: var(--ink-mid); }
+    .modal button.ghost:hover { color: var(--ink); background: var(--surface-3); }
+    .modal button.danger { background: var(--danger); color: var(--accent-ink); font-weight: 600; }
+    .modal button.danger:hover { background: var(--danger-hi); }
+    .modal button.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+    .modal button.primary:hover { background: var(--accent-hi); }
 
-    /* Spike 8 — Recording chip + popover */
-    .tool-btn.recorder-chip.active {
-      background: rgba(242, 72, 34, 0.16);
-      color: #ff4f33;
-    }
-    .tool-btn.recorder-chip.active:hover {
-      background: rgba(242, 72, 34, 0.25);
-    }
-    .tool-btn.recorder-chip .rec-dot {
-      width: 8px; height: 8px; border-radius: 999px; background: #ff4f33;
-      flex-shrink: 0; display: inline-block;
-      animation: rec-pulse 1.4s ease-in-out infinite;
-    }
-    @keyframes rec-pulse {
-      0%, 100% { opacity: 1; }
-      50% { opacity: 0.45; }
-    }
-    .rec-popover {
-      position: fixed; right: 12px; width: 320px;
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
-      pointer-events: auto; overflow: hidden;
-      font-size: 12px;
-    }
-    .rec-popover-header {
-      display: flex; align-items: center; justify-content: space-between;
-      padding: 10px 12px; border-bottom: 1px solid var(--border);
-    }
-    .rec-popover-title { font-weight: 600; color: var(--text); font-size: 12px; }
-    .rec-popover-close {
-      all: unset; cursor: pointer; color: var(--text-2);
-      width: 22px; height: 22px; border-radius: 4px;
-      display: inline-flex; align-items: center; justify-content: center;
-    }
-    .rec-popover-close:hover { background: var(--bg-3); color: var(--text); }
-    .rec-popover-close svg { width: 12px; height: 12px; }
-    .rec-popover-meta {
-      padding: 8px 12px; color: var(--text-2); font-size: 11px;
-      border-bottom: 1px solid var(--border); line-height: 1.5;
-    }
-    .rec-popover-meta b { color: var(--text); font-weight: 600; }
-    .rec-redact-chip {
-      display: inline-block; margin-left: 6px;
-      padding: 1px 6px; border-radius: 999px; font-size: 10px;
-      background: rgba(13, 153, 255, 0.16); color: var(--accent);
-      font-family: 'JetBrains Mono', monospace; font-weight: 600;
-    }
-    .rec-popover-list {
-      max-height: 240px; overflow-y: auto;
-      padding: 6px 0;
-    }
-    .rec-popover-list-empty {
-      padding: 14px; text-align: center; color: var(--text-3); font-size: 11px;
-    }
-    .rec-step {
-      padding: 5px 12px; color: var(--text); font-size: 11px;
-      display: flex; gap: 8px; line-height: 1.45;
-    }
-    .rec-step + .rec-step { border-top: 1px solid rgba(255,255,255,0.04); }
-    .rec-step:hover { background: var(--bg-3); }
-    .rec-step .rec-step-n {
-      flex-shrink: 0; color: var(--text-3);
-      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
-      font-size: 10px; width: 22px; text-align: right;
-    }
-    .rec-step .rec-step-text { flex: 1; word-break: break-word; }
-    .rec-step .rec-step-text code {
-      background: var(--bg-3); padding: 0 4px; border-radius: 3px;
-      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-size: 10px;
-    }
-    .rec-step .rec-step-text strong { color: var(--text); font-weight: 600; }
-    .rec-popover-actions {
-      display: flex; justify-content: space-between; gap: 6px;
-      padding: 8px 12px; border-top: 1px solid var(--border);
-      background: var(--bg);
-    }
-    .rec-popover-actions button {
-      all: unset; cursor: pointer; font-size: 11px; font-weight: 500;
-      padding: 5px 10px; border-radius: 4px;
-    }
-    .rec-popover-actions button.ghost { color: var(--text-2); }
-    .rec-popover-actions button.ghost:hover { color: var(--text); background: var(--bg-3); }
-    .rec-popover-actions button.danger { color: var(--danger); }
-    .rec-popover-actions button.danger:hover { background: rgba(242,72,34,0.1); }
-
-    /* Toast */
+    /* Toast (bottom-center, above the toolbar) */
     .toast-layer {
-      position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+      position: fixed; bottom: 76px; left: 50%; transform: translateX(-50%);
       display: flex; flex-direction: column; gap: 6px;
       pointer-events: none; align-items: center;
     }
     .toast {
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px;
-      padding: 6px 14px; font-size: 11px; color: var(--text);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      background: var(--surface-1); border: 1px solid var(--stroke); border-radius: var(--r-3);
+      padding: 6px 14px; font-size: 11px; color: var(--ink);
+      box-shadow: var(--shadow-3);
       transition: opacity 0.2s, transform 0.2s;
       pointer-events: auto;
     }
@@ -470,55 +474,46 @@
   const chrome = document.createElement('div');
   chrome.className = 'chrome';
 
-  // SVG icons
-  const ICON_COMMENT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>`;
-  const ICON_X = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>`;
-  const ICON_CHEVRON_DOWN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>`;
-  const ICON_CHEVRON_UP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>`;
-  const ICON_CHECK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`;
-  const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
-  const ICON_REC = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>`;
+  // ------- Icons (lucide path data, matching console/ui/icons.mjs) -------
 
-  // 9c-feedback-3: Comment + New stay icon-only; Record reverts to labeled
-  // (Record at rest → Recording · N when active) so the verb-bar lockup is
-  // 3 icons + 1 labeled verb + Save CTA.
-  const ADD_LABEL = `<span class="tb-ic">${ICON_COMMENT}</span>`;
-  const CANCEL_LABEL = `<span class="tb-ic">${ICON_X}</span>`;
-  const REC_LABEL_RESTING = `<span class="tb-ic">${ICON_REC}</span><span class="tb-label">Record</span>`;
+  const ic = (inner, sw = 1.8) =>
+    `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${sw}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${inner}</svg>`;
 
-  const panel = document.createElement('div');
-  panel.className = 'panel collapsed';
-  panel.innerHTML = `
-    <div class="panel-header">
-      <button class="tool-btn" id="addBtn" title="Drop a comment — click, then click on the page">${ADD_LABEL}</button>
-      <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span></button>
-      <button class="tool-btn recorder-chip" id="recBtn" title="Start recording the path the engineer will replay">${REC_LABEL_RESTING}</button>
-      <button class="tool-btn done-cta" id="doneBtn" title="Finish the review — seal this screen, lock the recorded path; continue in the console">Done</button>
-      <button class="icon-btn" id="toggleBtn" title="Show screens & pins">${ICON_CHEVRON_DOWN}</button>
-    </div>
-    <div class="confirm-bar" id="confirmBar" hidden>
-      <div class="confirm-msg">Finish this review? This seals the current screen and locks the recorded path the engineer replays. You'll continue any edits in the console.</div>
-      <div class="confirm-actions">
-        <button class="confirm-cancel" id="doneCancelBtn">Cancel</button>
-        <button class="confirm-ok" id="doneConfirmBtn">Done</button>
-      </div>
-    </div>
-    <div class="panel-body" id="panelBody">
-      <div class="section">
-        <div class="section-header">
-          <span class="section-title" id="viewsHeader">Screens</span>
-        </div>
-        <div class="view-list" id="viewList"></div>
-      </div>
-      <div class="section">
-        <div class="section-header">
-          <span class="section-title" id="pinsHeader">Pins</span>
-        </div>
-        <div class="pin-list" id="pinList"></div>
-      </div>
-    </div>
+  const ICON_COMMENT = ic('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>');
+  const ICON_PLUS = ic('<path d="M5 12h14"/><path d="M12 5v14"/>', 2.2);
+  const ICON_X = ic('<path d="M18 6 6 18"/><path d="m6 6 12 12"/>', 2.2);
+  const ICON_CHEV_DOWN = ic('<path d="m6 9 6 6 6-6"/>', 2.2);
+  const ICON_ARROW_UP = ic('<path d="m5 12 7-7 7 7"/><path d="M12 19V5"/>', 2.2);
+  // Filled-dot grip (lucide grip-vertical, filled for a crisper drag handle).
+  const ICON_GRIP =
+    '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="9" cy="5" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="15" cy="5" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="19" r="1.4"/></svg>';
+  // Card / menu glyphs
+  const ICON_TRASH = ic('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>');
+  const ICON_MORE = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+  const ICON_CHECK = ic('<path d="M20 6 9 17l-5-5"/>', 2.2);
+  const ICON_PENCIL = ic('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>');
+
+  // ------- Toolbar ------------------------------------------------------
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'toolbar';
+  toolbar.innerHTML = `
+    <span class="tb-grip" id="gripBtn" title="Drag to move">${ICON_GRIP}</span>
+    <span class="tb-divider"></span>
+    <span class="tb-cluster">
+      <span class="tb-ibtn" id="commentBtn" title="Comment — click, then click on the page">${ICON_COMMENT}</span>
+      <span class="tb-ibtn" id="newScreenBtn" title="New screen — seal this screen's comments and start a fresh, separate set of pins on this page">${ICON_PLUS}</span>
+    </span>
+    <span class="tb-divider"></span>
+    <span class="tb-cluster">
+      <span class="tb-rec" id="recBtn" title="Start recording the path the engineer will replay"><span class="rec-glyph idle"></span></span>
+      <button class="tb-done" id="doneBtn" title="Finish the review — seal this screen, lock the recorded path; continue in the console">Done</button>
+    </span>
   `;
-  chrome.appendChild(panel);
+  chrome.appendChild(toolbar);
+
+  // Top recording indicator (created lazily; only present while recording).
+  let recIndicatorEl = null;
 
   const popoverLayer = document.createElement('div');
   popoverLayer.className = 'popover-layer';
@@ -564,7 +559,11 @@
     try {
       const { view } = await window.__designQA_loadForUrl({ url: location.href });
       if (view && view.id === STATE.viewId) {
-        STATE.pins = view.pins.map((p) => ({ id: p.id, x: p.x, y: p.y, note: p.note }));
+        STATE.pins = view.pins.map((p) => ({
+          id: p.id, x: p.x, y: p.y, note: p.note,
+          category: p.category ?? null, author: p.author ?? null,
+          status: p.status ?? 'open', createdAt: p.createdAt ?? null,
+        }));
         logPins('reload');
         renderPins();
       }
@@ -633,7 +632,7 @@
       const el = document.createElement('div');
       el.className = 'pin' + (pin.id === STATE.activePinId ? ' active' : '');
       // Anchor: pin's bottom-left tail tip at (x, y). Element's box top-left
-      // is (x, y - 24); since the bubble has its tail at bottom-left.
+      // is (x, y - 24); the bubble has its tail at bottom-left.
       el.style.left = pin.x + 'px';
       el.style.top = (pin.y - 24) + 'px';
       el.dataset.id = pin.id;
@@ -642,16 +641,13 @@
       pinLayer.appendChild(el);
     });
     logPins('renderPins');
-    updateCount();
   }
 
   function attachPinHandlers(el, pin) {
-    let dragState = null; // { startX, startY, startPinX, startPinY, moved, popoverWasOpen }
+    let dragState = null;
 
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0) return;
-      // Don't allow drag while the pin is still being created server-side.
-      // Click-to-toggle-popover still works via the pointerup-no-move path.
       e.preventDefault();
       el.setPointerCapture?.(e.pointerId);
       dragState = {
@@ -670,9 +666,7 @@
       if (!dragState.moved && Math.hypot(dx, dy) > 3) {
         dragState.moved = true;
         el.classList.add('dragging');
-        if (STATE.activePinId === pin.id) {
-          popoverLayer.innerHTML = '';
-        }
+        if (STATE.activePinId === pin.id) popoverLayer.innerHTML = '';
       }
       if (dragState.moved) {
         pin.x = dragState.startPinX + dx;
@@ -694,8 +688,6 @@
           try { await window.__designQA_updatePin({ pinId: pin.id, x: pin.x, y: pin.y }); }
           catch (err) { console.warn('design-qa: drag persist failed', err); }
         }
-        refreshSession();
-        // Re-open popover if it was open before the drag started.
         if (popoverWasOpen) {
           STATE.activePinId = pin.id;
           renderPopover();
@@ -715,173 +707,270 @@
     });
   }
 
-  function updateCount() {
-    // No-op: count is shown in the inspector's section header.
+  // ------- Category control (shared by composer + edit card) ------------
+
+  /** Self-contained category chip / "+ Category" button + dropdown picker.
+   *  getCat() reads the current value; setCat(keyOrNull) fires on change (the
+   *  caller decides when to persist). Owns its own open/closed + re-render. */
+  function buildCategoryControl(getCat, setCat) {
+    const wrap = document.createElement('span');
+    wrap.className = 'cat-control';
+    let open = false;
+    function paint() {
+      const key = getCat();
+      const meta = key ? COMMENT_CATEGORIES[key] : null;
+      wrap.innerHTML = meta
+        ? `<span class="cat-chip" data-act="toggle"><span class="cat-dot" style="background:${meta.color}"></span><span>${escapeHtml(meta.label)}</span><span class="cat-chip-x" data-act="clear" title="Remove category">${ICON_X}</span></span>`
+        : `<span class="cat-add ${open ? 'open' : ''}" data-act="toggle">${ICON_PLUS}<span>Category</span></span>`;
+      if (open) {
+        const picker = document.createElement('div');
+        picker.className = 'cat-picker';
+        picker.innerHTML = `<div class="cat-picker-head">Category</div>` +
+          Object.entries(COMMENT_CATEGORIES).map(([k, m]) =>
+            `<span class="cat-picker-item ${k === key ? 'active' : ''}" data-cat="${k}"><span class="cat-dot" style="background:${m.color}"></span><span class="cat-picker-label">${escapeHtml(m.label)}</span>${k === key ? ICON_CHECK : ''}</span>`).join('');
+        wrap.appendChild(picker);
+      }
+    }
+    wrap.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = e.target.closest('[data-cat]');
+      if (item) { setCat(item.dataset.cat); open = false; paint(); return; }
+      if (e.target.closest('[data-act="clear"]')) { setCat(null); open = false; paint(); return; }
+      if (e.target.closest('[data-act="toggle"]')) { open = !open; paint(); return; }
+    });
+    paint();
+    return wrap;
   }
 
-  const ICON_ARROW_UP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>`;
+  // ------- Render: comment popover (composer / read / edit) -------------
 
+  function autoGrow(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; }
+
+  function relTime(iso) {
+    if (!iso) return 'Just now';
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return '';
+    const m = Math.floor((Date.now() - t) / 60000);
+    if (m < 1) return 'Just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 7) return `${d}d ago`;
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  /** Dispatch on pin kind + edit flag: temp → composer, existing → read card
+   *  (default) or edit card (when the user opted in via the ··· menu). */
   function renderPopover() {
     popoverLayer.innerHTML = '';
-    if (!STATE.activePinId) return;
+    if (!STATE.activePinId) { STATE.editing = false; return; }
     const pin = STATE.pins.find((p) => p.id === STATE.activePinId);
-    if (!pin) return;
-    const isTemp = String(pin.id).startsWith(TEMP_PREFIX);
+    if (!pin) { STATE.editing = false; return; }
+    if (String(pin.id).startsWith(TEMP_PREFIX)) { renderComposer(pin); return; }
+    if (STATE.editing) { renderEditCard(pin); return; }
+    renderReadCard(pin);
+  }
 
-    const pop = document.createElement('div');
+  function placeCard(pop, pin) {
     pop.style.left = pin.x + 'px';
-    pop.style.top = pin.y + 'px';
-    if (isTemp) {
-      // New comment: compact single-line pill (input + inline send button).
-      pop.className = 'composer-pill';
-      pop.innerHTML = `
-        <input type="text" class="pill-input" placeholder="Add a comment" />
-        <button class="send-btn" data-act="send" aria-disabled="true" title="Send">${ICON_ARROW_UP}</button>
-      `;
-    } else {
-      // Existing comment: multi-line card with delete affordance.
-      pop.className = 'popover';
-      pop.innerHTML = `
-        <textarea placeholder="Add a comment" rows="2"></textarea>
-        <div class="actions">
-          <div class="actions-left">
-            <button class="text-btn danger" data-act="delete">Delete</button>
-          </div>
-          <button class="send-btn" data-act="send" aria-disabled="true" title="Send">${ICON_ARROW_UP}</button>
-        </div>
-      `;
-    }
+    pop.style.top = (pin.y - 24) + 'px'; // align card top with the pin bubble top
     popoverLayer.appendChild(pop);
-    // Field is a <textarea> (card) or <input> (pill); both share the value /
-    // focus / selection / event APIs the handlers below rely on.
-    const ta = pop.querySelector('textarea') || pop.querySelector('.pill-input');
+  }
+
+  // New comment — DesignOS FxPinComposer. The footer (category + send) reveals
+  // once there's ≥1 character; before that it's a bare growing field.
+  function renderComposer(pin) {
+    let draftCategory = pin.category || null;
+    const pop = document.createElement('div');
+    pop.className = 'cmt-card composer';
+    pop.innerHTML = `
+      <textarea class="cmt-field" placeholder="Add a comment…" rows="1"></textarea>
+      <div class="cmt-bar hidden">
+        <span class="cat-slot"></span>
+        <span class="bar-spacer"></span>
+        <button class="send-btn" data-act="send" aria-disabled="true" title="Send">${ICON_ARROW_UP}</button>
+      </div>`;
+    placeCard(pop, pin);
+    const ta = pop.querySelector('.cmt-field');
+    const bar = pop.querySelector('.cmt-bar');
     const sendBtn = pop.querySelector('.send-btn');
+    pop.querySelector('.cat-slot').appendChild(
+      buildCategoryControl(() => draftCategory, (c) => { draftCategory = c; }));
     ta.value = pin.note || '';
+    autoGrow(ta);
     ta.focus();
     ta.setSelectionRange(ta.value.length, ta.value.length);
 
-    function updateSendState() {
+    const sync = () => {
       const hasText = ta.value.trim().length > 0;
+      bar.classList.toggle('hidden', !hasText);
       sendBtn.classList.toggle('active', hasText);
       sendBtn.setAttribute('aria-disabled', hasText ? 'false' : 'true');
-    }
-    updateSendState();
-
-    let saveTimer = null;
-    const persistExisting = async () => {
-      pin.note = ta.value;
-      try { await window.__designQA_updatePin({ pinId: pin.id, note: pin.note }); }
-      catch (e) { console.warn('design-qa: updatePin failed', e); }
-      refreshSession();
     };
-
-    const commit = async () => {
-      const text = ta.value.trim();
-      if (!text) return; // nothing to send
-      if (isTemp) {
-        const tempIdVal = pin.id;
-        // Lazy-create the view here too, so dismissed temp pins don't leave
-        // empty screens behind.
-        let createdNewView = false;
-        if (!STATE.viewId) {
-          try {
-            const result = await window.__designQA_ensureView({
-              url: location.href,
-              title: document.title || location.href,
-              viewport: { width: window.innerWidth, height: window.innerHeight },
-            });
-            STATE.viewId = result.viewId;
-            createdNewView = !!result.isNew;
-          } catch (e) {
-            console.warn('design-qa: ensureView failed', e);
-            STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
-            STATE.activePinId = null;
-            renderPins();
-            renderPopover();
-            return;
-          }
-        }
-        try {
-          const { pinId } = await window.__designQA_createPin({
-            viewId: STATE.viewId, x: pin.x, y: pin.y, note: ta.value,
-          });
-          // Promote the captured temp pin object in place (no findIndex —
-          // robust to STATE.pins being mutated during the await). If a
-          // click-outside discarded it mid-flight, re-add it so the canvas
-          // never loses a pin the daemon already persisted (bug #1).
-          pin.id = pinId;
-          pin.note = ta.value;
-          if (!STATE.pins.includes(pin)) STATE.pins.push(pin);
-          logPins('commit-swap');
-          if (createdNewView) {
-            toast(`Started screen for ${truncate(document.title || location.href, 48)}`);
-          }
-        } catch (e) {
-          console.warn('design-qa: createPin failed', e);
-          STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
-        }
-      } else {
-        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-        await persistExisting();
-      }
-      STATE.activePinId = null;
-      renderPins();
-      renderPopover();
-      // Reconcile canvas against the daemon's authoritative pin set so ids,
-      // ordering and numbering always match session.json.
-      await reloadActiveViewPins();
-      refreshSession();
-    };
-
-    const discardOrClose = () => {
-      // For a temp pin: discard (do not call createPin). For existing: just close.
-      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-      if (isTemp) {
-        STATE.pins = STATE.pins.filter((p) => p.id !== pin.id);
-      } else if (ta.value !== (pin.note || '')) {
-        // Existing pin: save any in-flight edits before closing.
-        persistExisting();
-      }
-      STATE.activePinId = null;
-      renderPins();
-      renderPopover();
-    };
-
-    ta.addEventListener('input', () => {
-      updateSendState();
-      if (isTemp) return; // don't auto-save until user explicitly Sends
-      pin.note = ta.value;
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(persistExisting, 600);
+    sync();
+    const send = () => { if (ta.value.trim()) commitTempPin(pin, ta.value, draftCategory); };
+    ta.addEventListener('input', () => { autoGrow(ta); sync(); });
+    ta.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) { e.preventDefault(); send(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); closePopoverIfOpen(); }
     });
+    sendBtn.addEventListener('click', () => { if (sendBtn.getAttribute('aria-disabled') !== 'true') send(); });
+  }
+
+  // Existing comment, default view — DesignOS FxCommentRead (read-only). Edit is
+  // an explicit affordance via the ··· menu; resolved pins read muted + badged.
+  function renderReadCard(pin) {
+    const resolved = pin.status === 'resolved';
+    const meta = pin.category ? COMMENT_CATEGORIES[pin.category] : null;
+    const pop = document.createElement('div');
+    pop.className = 'cmt-card read' + (resolved ? ' resolved' : '');
+    pop.innerHTML = `
+      <div class="cmt-head">
+        <span class="cmt-author">${escapeHtml(pin.author || 'You')}</span>
+        <span class="cmt-time">${escapeHtml(relTime(pin.createdAt))}</span>
+        ${resolved ? `<span class="cmt-resolved-badge">${ICON_CHECK}Resolved</span>` : ''}
+        <button class="cmt-icon-btn" data-act="more" title="More">${ICON_MORE}</button>
+      </div>
+      <div class="cmt-read-body">${escapeHtml(pin.note || '')}</div>
+      ${meta ? `<div class="cmt-tag-row"><span class="cat-chip" style="cursor:default"><span class="cat-dot" style="background:${resolved ? 'var(--ink-mid)' : meta.color}"></span><span>${escapeHtml(meta.label)}</span></span></div>` : ''}`;
+    placeCard(pop, pin);
+    pop.querySelector('[data-act="more"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openReadMenu(pop, pin);
+    });
+  }
+
+  function openReadMenu(pop, pin) {
+    pop.querySelector('.cmt-menu')?.remove();
+    const menu = document.createElement('div');
+    menu.className = 'cmt-menu';
+    menu.innerHTML = `
+      <div class="cmt-menu-item" data-act="edit"><span class="mi-ic">${ICON_PENCIL}</span><span>Edit</span></div>
+      <div class="cmt-menu-item danger" data-act="del"><span class="mi-ic">${ICON_TRASH}</span><span>Delete</span></div>`;
+    menu.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'edit') { STATE.editing = true; renderPopover(); }
+      else if (act === 'del') deletePinById(pin);
+    });
+    pop.appendChild(menu);
+  }
+
+  // Existing comment, editing — DesignOS FxCommentEdit. Save persists note +
+  // category and returns to the read card; Cancel reverts without persisting.
+  function renderEditCard(pin) {
+    let draftCategory = pin.category || null;
+    const pop = document.createElement('div');
+    pop.className = 'cmt-card edit';
+    pop.innerHTML = `
+      <div class="cmt-edit-head">
+        <span class="cmt-edit-title">Comment</span>
+        <button class="cmt-icon-btn danger" data-act="del" title="Delete">${ICON_TRASH}</button>
+        <button class="cmt-icon-btn" data-act="cancel" title="Cancel">${ICON_X}</button>
+      </div>
+      <div class="cmt-edit-divider"></div>
+      <div class="cmt-edit-inset">
+        <textarea class="cmt-field" placeholder="Add a comment…" rows="2"></textarea>
+        <div class="cmt-bar">
+          <span class="cat-slot"></span>
+          <span class="bar-spacer"></span>
+          <button class="cmt-cancel" data-act="cancel">Cancel</button>
+          <button class="cmt-save" data-act="save">Save</button>
+        </div>
+      </div>`;
+    placeCard(pop, pin);
+    const ta = pop.querySelector('.cmt-field');
+    pop.querySelector('.cat-slot').appendChild(
+      buildCategoryControl(() => draftCategory, (c) => { draftCategory = c; }));
+    ta.value = pin.note || '';
+    autoGrow(ta);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ta.addEventListener('input', () => autoGrow(ta));
+
+    const save = async () => {
+      pin.note = ta.value;
+      pin.category = draftCategory || null;
+      STATE.editing = false;
+      renderPins();
+      renderPopover();
+      try { await window.__designQA_updatePin({ pinId: pin.id, note: pin.note, category: draftCategory ?? null }); }
+      catch (e) { console.warn('design-qa: updatePin failed', e); }
+    };
+    const cancel = () => { STATE.editing = false; renderPopover(); };
 
     ta.addEventListener('keydown', (e) => {
-      const isCommit = (e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter');
-      if (isCommit) { e.preventDefault(); commit(); return; }
-      if (e.key === 'Escape') { e.preventDefault(); discardOrClose(); }
+      if ((e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) { e.preventDefault(); save(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     });
+    pop.querySelector('[data-act="save"]').addEventListener('click', save);
+    pop.querySelectorAll('[data-act="cancel"]').forEach((b) => b.addEventListener('click', cancel));
+    pop.querySelector('[data-act="del"]').addEventListener('click', () => deletePinById(pin));
+  }
 
-    sendBtn.addEventListener('click', () => {
-      if (sendBtn.getAttribute('aria-disabled') === 'true') return;
-      commit();
-    });
-
-    pop.querySelector('[data-act="delete"]')?.addEventListener('click', async () => {
-      const pinIdToDelete = pin.id;
-      STATE.pins = STATE.pins.filter((p) => p.id !== pinIdToDelete);
-      STATE.activePinId = null;
-      renderPins();
-      renderPopover();
+  // Create the server-side pin from a temp draft (lazy-creating the view on the
+  // first comment so dismissed drafts don't leave empty screens).
+  async function commitTempPin(pin, note, category) {
+    const tempIdVal = pin.id;
+    let createdNewView = false;
+    if (!STATE.viewId) {
       try {
-        await window.__designQA_deletePin({ pinId: pinIdToDelete });
-        toast('Comment deleted');
+        const result = await window.__designQA_ensureView({
+          url: location.href,
+          title: document.title || location.href,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        });
+        STATE.viewId = result.viewId;
+        createdNewView = !!result.isNew;
       } catch (e) {
-        console.warn('design-qa: deletePin failed', e);
-        STATE.pins.push({ ...pin });
+        console.warn('design-qa: ensureView failed', e);
+        STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
+        STATE.activePinId = null;
         renderPins();
+        renderPopover();
+        return;
       }
-      refreshSession();
-    });
+    }
+    try {
+      const { pinId } = await window.__designQA_createPin({
+        viewId: STATE.viewId, x: pin.x, y: pin.y, note, category: category || null,
+      });
+      // Promote the captured temp pin object in place (robust to STATE.pins
+      // being mutated during the await).
+      pin.id = pinId;
+      pin.note = note;
+      pin.category = category || null;
+      if (!STATE.pins.includes(pin)) STATE.pins.push(pin);
+      logPins('commit-swap');
+      if (createdNewView) toast(`Started screen for ${truncate(document.title || location.href, 48)}`);
+    } catch (e) {
+      console.warn('design-qa: createPin failed', e);
+      STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
+    }
+    STATE.activePinId = null;
+    STATE.editing = false;
+    renderPins();
+    renderPopover();
+    // Reconcile canvas against the daemon's authoritative pin set.
+    await reloadActiveViewPins();
+  }
+
+  async function deletePinById(pin) {
+    const pinId = pin.id;
+    STATE.pins = STATE.pins.filter((p) => p.id !== pinId);
+    STATE.activePinId = null;
+    STATE.editing = false;
+    renderPins();
+    renderPopover();
+    try {
+      await window.__designQA_deletePin({ pinId });
+      toast('Comment deleted');
+    } catch (e) {
+      console.warn('design-qa: deletePin failed', e);
+      STATE.pins.push({ ...pin });
+      renderPins();
+    }
   }
 
   function closePopoverIfOpen() {
@@ -889,158 +978,47 @@
     const activeId = STATE.activePinId;
     const isTemp = String(activeId).startsWith(TEMP_PREFIX);
     if (isTemp) {
-      // Discard the un-sent temp pin entirely. Only temp pins are dropped —
-      // a real pin must never be removed here (bug #1).
       STATE.pins = STATE.pins.filter((p) => p.id !== activeId);
       logPins('closePopover-discard-temp');
     }
     STATE.activePinId = null;
+    STATE.editing = false;
     renderPins();
     renderPopover();
   }
 
-  // Click outside the popover (and outside any pin) closes it.
-  // Uses composedPath so we can see into our shadow DOM.
+  // Click outside our UI closes the card. The shadow root is CLOSED, so a
+  // document-level composedPath() can't see our internals (it would report
+  // every in-card click — the ··· menu, the + Category button — as "outside").
+  // But every click that lands inside the shadow retargets to the host, so
+  // `e.target === host` is the reliable "click was inside our UI" test. Pin
+  // clicks never reach here: the pin's pointerdown preventDefault suppresses
+  // the synthetic click.
   document.addEventListener('click', (e) => {
     if (!STATE.activePinId) return;
-    const path = e.composedPath?.() || [];
-    for (const node of path) {
-      if (!node || !node.classList) continue;
-      if (node.classList.contains('pin') || node.classList.contains('popover') || node.classList.contains('composer-pill')) return;
-    }
+    if (e.target === host) return; // inside our shadow UI — let it handle itself
     logPins('click-outside-close');
     closePopoverIfOpen();
   }, true);
 
-  // ------- Render: inspector --------------------------------------------
+  // ------- New screen (＋) ----------------------------------------------
 
-  function renderInspector() {
-    const { views, activeViewId } = STATE.session;
-    if (!STATE.selectedInspectorViewId && activeViewId) {
-      STATE.selectedInspectorViewId = activeViewId;
-    }
-    if (STATE.selectedInspectorViewId && !views.find((v) => v.id === STATE.selectedInspectorViewId)) {
-      STATE.selectedInspectorViewId = activeViewId || null;
-    }
-
-    const viewsHeader = $('viewsHeader');
-    if (viewsHeader) viewsHeader.textContent = `Screens · ${views.length}`;
-
-    const viewList = $('viewList');
-    if (views.length === 0) {
-      viewList.innerHTML = '<div class="empty">No screens yet. Click the comment button, then click anywhere on the page.</div>';
-    } else {
-      viewList.innerHTML = views.map((v) => `
-        <div class="view-item ${v.id === activeViewId ? 'active' : ''} ${v.id === STATE.selectedInspectorViewId ? 'selected' : ''}" data-id="${v.id}">
-          <div class="view-row">
-            <span class="view-name">${escapeHtml(v.name)}</span>
-            <span class="view-pins">${v.pinCount}</span>
-          </div>
-          <div class="view-url" title="${escapeHtml(v.url)}">${escapeHtml(v.url)}</div>
-          <div class="view-actions">
-            ${v.id === activeViewId ? '' : '<button data-act="jump" title="Navigate the browser to this URL">Jump</button>'}
-            <button data-act="rename">Rename</button>
-            <button class="danger" data-act="delete">Delete</button>
-          </div>
-        </div>
-      `).join('');
-      viewList.querySelectorAll('.view-item').forEach((el) => {
-        const id = el.dataset.id;
-        el.addEventListener('click', (e) => {
-          if (e.target.closest('.view-actions')) return;
-          STATE.selectedInspectorViewId = id;
-          renderInspector();
-        });
-        el.querySelector('[data-act="jump"]')?.addEventListener('click', () => jumpToView(id));
-        el.querySelector('[data-act="rename"]')?.addEventListener('click', () => beginRename(el, id));
-        el.querySelector('[data-act="delete"]')?.addEventListener('click', () => confirmDeleteView(id));
-      });
-    }
-
-    const selectedView = views.find((v) => v.id === STATE.selectedInspectorViewId);
-    const pinsHeader = $('pinsHeader');
-    if (pinsHeader) pinsHeader.textContent = selectedView ? `Pins · ${selectedView.pinCount}` : 'Pins';
-
-    const pinList = $('pinList');
-    if (!selectedView || selectedView.pinCount === 0) {
-      pinList.innerHTML = '<div class="empty">No pins on this screen.</div>';
-    } else {
-      pinList.innerHTML = selectedView.pins.map((p, i) => `
-        <div class="pin-row ${p.id === STATE.activePinId ? 'active' : ''}" data-id="${p.id}">
-          <span class="pin-num">${i + 1}</span>
-          <span class="pin-note ${p.note ? '' : 'empty'}">${p.note ? escapeHtml(p.note) : '(no comment)'}</span>
-        </div>
-      `).join('');
-      pinList.querySelectorAll('.pin-row').forEach((el) => {
-        el.addEventListener('click', () => focusPinFromInspector(el.dataset.id, selectedView.id));
-      });
-    }
-  }
-
-  // ------- Inspector actions --------------------------------------------
-
-  async function jumpToView(viewId) {
-    const v = STATE.session.views.find((x) => x.id === viewId);
-    if (!v) return;
-    try { await window.__designQA_navigateTo({ url: v.url }); }
-    catch (e) { console.warn('design-qa: navigateTo failed', e); }
-  }
-
-  function beginRename(viewItemEl, viewId) {
-    const v = STATE.session.views.find((x) => x.id === viewId);
-    if (!v) return;
-    const nameEl = viewItemEl.querySelector('.view-name');
-    if (!nameEl) return;
-    const input = document.createElement('input');
-    input.className = 'view-rename-input';
-    input.value = v.name;
-    nameEl.replaceWith(input);
-    input.focus();
-    input.select();
-    let done = false;
-    const finish = async (save) => {
-      if (done) return;
-      done = true;
-      if (save) {
-        const name = input.value.trim();
-        if (name && name !== v.name) {
-          try { await window.__designQA_renameView({ viewId, name }); }
-          catch (e) { console.warn('design-qa: renameView failed', e); }
-        }
-      }
-      refreshSession();
-    };
-    input.addEventListener('blur', () => finish(true));
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
-      if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-    });
-  }
-
-  async function confirmDeleteView(viewId) {
-    const v = STATE.session.views.find((x) => x.id === viewId);
-    if (!v) return;
+  // ＋ is a screen *boundary*, not a quick add — it seals the comments you've
+  // placed so far and opens a fresh, separate set on this same URL. Because the
+  // browser can no longer name the screen inline, gate it behind a confirm (the
+  // same modal vocabulary as Done) so the consequence is explicit.
+  async function requestNewScreen() {
+    const realPins = STATE.pins.filter((p) => !String(p.id).startsWith(TEMP_PREFIX));
+    const seals = realPins.length
+      ? `This seals the current screen (${realPins.length} comment${realPins.length === 1 ? '' : 's'}) and`
+      : 'This';
     const ok = await confirmModal({
-      title: 'Delete screen?',
-      body: v.pinCount > 0
-        ? `"${v.name}" has ${v.pinCount} pin${v.pinCount === 1 ? '' : 's'}. Deleting this screen will remove its pins and screenshot. This can't be undone.`
-        : `Delete empty screen "${v.name}"?`,
-      confirmLabel: 'Delete',
-      cancelLabel: 'Cancel',
-      danger: true,
+      title: 'Start a new screen?',
+      body: `${seals} begins a separate set of comments on this page. You can rename it in the console.`,
+      confirmLabel: 'New screen',
     });
     if (!ok) return;
-    try { await window.__designQA_deleteView({ viewId }); }
-    catch (e) { console.warn('design-qa: deleteView failed', e); return; }
-    if (STATE.viewId === viewId) {
-      STATE.viewId = null;
-      STATE.pins = [];
-      STATE.activePinId = null;
-      renderPins();
-      renderPopover();
-    }
-    toast('Screen deleted');
-    refreshSession();
+    startNewScreenHere();
   }
 
   async function startNewScreenHere() {
@@ -1050,214 +1028,194 @@
     STATE.viewId = result.newViewId;
     STATE.pins = [];
     STATE.activePinId = null;
+    STATE.editing = false;
     renderPins();
     renderPopover();
-    if (!STATE.inspectorExpanded) setInspectorExpanded(true);
-    await refreshSession();
-    if (result.newViewId) {
-      requestAnimationFrame(() => {
-        const row = shadow.querySelector(`.view-item[data-id="${result.newViewId}"]`);
-        if (row) {
-          STATE.selectedInspectorViewId = result.newViewId;
-          beginRename(row, result.newViewId);
-        }
-      });
-    }
-    toast('New screen — give it a name');
+    toast('New screen started — rename it in the console');
   }
 
-  // "Done" (9f): the SESSION-LEVEL wrap-up — seal the current screen AND
-  // finalize-keep the recording (lock view.steps, stop the recorder appending),
-  // pressed once at the end. Between-screen moves are navigation / "New" (those
-  // auto-seal and recording keeps running); Done is the "I'm finished" gesture.
-  // It does NOT close the browser — the session stays live so the user can keep
-  // reviewing in the console; closing the browser finalizes views on its own.
-  // The one-way nature is made explicit via an INLINE confirm in the toolbar
-  // (native confirm() is auto-dismissed by Playwright, so it can't be used).
+  // ------- Done (session-level finalize-keep, 9f) -----------------------
+  // Seals the current screen AND finalize-keeps the recording (locks view.steps,
+  // stops the recorder appending). Available whenever there's something to
+  // finish — pins on THIS screen OR an active recording. Does NOT close the
+  // browser; the session stays live so the user can keep editing in the console.
 
-  function setDoneConfirm(open) {
-    const bar = $('confirmBar');
-    const btn = $('doneBtn');
-    if (bar) bar.hidden = !open;
-    if (btn) btn.classList.toggle('active', open);
-    if (open) window.addEventListener('keydown', confirmEsc, { capture: true });
-    else window.removeEventListener('keydown', confirmEsc, { capture: true });
-  }
-
-  function confirmEsc(e) {
-    if (e.key === 'Escape') { e.preventDefault(); setDoneConfirm(false); }
-  }
-
-  // Gate before showing the confirm: Done is session-level, so it's available
-  // whenever there's something to finish — pins on THIS screen OR an active
-  // recording (whose path spans other screens). Nothing of either → toast.
-  function requestDone() {
+  async function requestDone() {
     const realPins = STATE.pins.filter((p) => !String(p.id).startsWith(TEMP_PREFIX));
     const hasCurrentPins = STATE.viewId && realPins.length > 0;
     if (!hasCurrentPins && !STATE.recorder.active) {
       toast('Add a comment or start recording before finishing');
       return;
     }
-    setDoneConfirm(true);
+    const ok = await confirmModal({
+      title: 'Finish this review?',
+      body: 'This seals the current screen and locks the recorded path the engineer replays. You can keep editing in the console.',
+      confirmLabel: 'Done',
+    });
+    if (!ok) return;
+    await performDone();
   }
 
   async function performDone() {
-    setDoneConfirm(false);
-    // 1. Seal the current screen (if it carries pins or recorded steps). The
-    //    recording is still active here, so sealCurrentView preserves a
-    //    steps-only segment for a pass-through screen.
+    // 1. Seal the current screen (preserves a steps-only segment for a
+    //    pass-through screen — the recording is still active here).
     try { await window.__designQA_sealCurrentView({ url: location.href }); }
     catch (e) { console.warn('design-qa: sealCurrentView failed', e); }
     // 2. Finalize-keep the recording: locks view.steps, stops appending, rests
-    //    the chip. (This is __designQA_stopRecording's 9f meaning — NOT discard.)
+    //    the record button. (__designQA_stopRecording's 9f meaning — NOT discard.)
     try { await window.__designQA_stopRecording(); }
     catch (e) { console.warn('design-qa: finalize recording failed', e); }
-    // Reset local state: there's no editable view for this URL anymore. The next
-    // pin's commit calls ensureView, which creates a fresh screen.
     STATE.viewId = null;
     STATE.pins = [];
     STATE.activePinId = null;
     renderPins();
     renderPopover();
-    await refreshSession();
     toast('Done — recording locked; continue any edits in the console');
   }
 
-  // ------- Spike 8 — Recording chip + popover --------------------------
+  // ------- Record button (start/stop toggle) ----------------------------
+  // No secondary ▾ menu: the button just toggles start ↔ stop (finalize-keep).
+  // Discard lives in the recording indicator (it's about the recording, not the
+  // start trigger); Reset-start-here was dropped.
 
-  // Re-render the verb-bar chip from STATE.recorder. Called whenever the
-  // Node-side setter pushes new state; cheap, ~constant time.
-  function renderRecorderChip() {
+  function renderRecButton() {
     const btn = $('recBtn');
     if (!btn) return;
-    const r = STATE.recorder;
-    if (r.active) {
-      btn.classList.add('active');
-      btn.innerHTML = `<span class="rec-dot"></span><span class="tb-label">Recording · ${r.count}</span>`;
-      btn.title = 'Open recording details';
+    const live = STATE.recorder.active;
+    btn.innerHTML = `<span class="rec-glyph ${live ? 'live' : 'idle'}"></span>`;
+    btn.title = live ? 'Stop recording — keep the recorded path' : 'Start recording the path the engineer will replay';
+  }
+
+  async function onRecToggle() {
+    if (STATE.recorder.active) {
+      try { await window.__designQA_stopRecording(); }
+      catch (err) { console.warn('design-qa: finalize recording failed', err); }
     } else {
-      btn.classList.remove('active');
-      btn.innerHTML = REC_LABEL_RESTING;
-      btn.title = 'Start recording the path the engineer will replay';
+      try { await window.__designQA_markStart(); }
+      catch (err) { console.warn('design-qa: markStart failed', err); }
     }
+    // The state push from Node flips the visuals; no manual update needed.
   }
 
-  // Popover state: a single transient element in `chrome`; null when closed.
-  let recPopoverEl = null;
-  let recStopwatchTimer = null;
-
-  function formatElapsed(ms) {
-    if (!ms || ms < 0) return '0:00';
-    const s = Math.floor(ms / 1000);
-    const m = Math.floor(s / 60);
-    return `${m}:${String(s % 60).padStart(2, '0')}`;
+  // Discard the in-progress recording from the indicator (confirm first).
+  async function discardRecording() {
+    const ok = await confirmModal({
+      title: 'Discard recording?',
+      body: 'The recorded path will be cleared. Captured steps move to preconditions as hints. This can’t be undone here.',
+      confirmLabel: 'Discard',
+      danger: true,
+    });
+    if (!ok) return;
+    try { await window.__designQA_discardRecording(); }
+    catch (err) { console.warn('design-qa: discardRecording failed', err); }
   }
 
-  /** Strip the markdown bold + backtick used in describeAction so the inline
-   *  popover renders without a markdown parser. Code spans become <code>,
-   *  bold becomes <strong>. */
+  // ------- Top recording indicator --------------------------------------
+
+  /** Strip the markdown bold + backtick from describeAction output so the inline
+   *  timeline renders without a markdown parser. */
   function renderInlineMd(text) {
-    const escaped = escapeHtml(text);
-    return escaped
+    return escapeHtml(text)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
   }
 
-  function renderRecPopoverMeta() {
-    if (!recPopoverEl) return;
-    const r = STATE.recorder;
-    const meta = recPopoverEl.querySelector('.rec-popover-meta');
-    if (!meta) return;
-    const elapsedText = r.startedAtMs
-      ? `Started ${formatElapsed(Date.now() - r.startedAtMs)} ago`
-      : 'Not recording';
-    const redactChip = r.redactionCount > 0
-      ? ` <span class="rec-redact-chip" title="${r.redactionCount} value(s) redacted from captured fields">${r.redactionCount} redacted</span>`
-      : '';
-    meta.innerHTML =
-      `${elapsedText} · <b>${r.count}</b> step${r.count === 1 ? '' : 's'} captured${redactChip}`;
+  // kind → timeline stamp verb + a regex that strips the leading verb phrase
+  // from describeAction's humanText so the target line doesn't repeat it.
+  const ACTION_LABEL = {
+    click: 'Click', dblclick: 'Double-click', fill: 'Type', press: 'Press',
+    navigate: 'Go to', select: 'Select', check: 'Check', uncheck: 'Uncheck',
+    setInputFiles: 'Upload', closePage: 'Close',
+  };
+  const STRIP_PREFIX = {
+    click: /^Click\s+/, dblclick: /^Double-click\s+/, fill: /^Type\s+/,
+    press: /^Press\s+/, navigate: /^Go to\s+/, select: /^Pick\s+/,
+    check: /^Check\s+/, uncheck: /^Uncheck\s+/, setInputFiles: /^Upload file\(s\) into\s+/,
+  };
+
+  function stepTilesHTML(steps) {
+    const startNum = Math.max(1, steps.length - 99);
+    return steps.map((s, i) => {
+      const action = ACTION_LABEL[s.kind] || 'Step';
+      const human = s.humanText || '';
+      const strip = STRIP_PREFIX[s.kind];
+      const targetRaw = strip ? human.replace(strip, '') : human;
+      const target = renderInlineMd(targetRaw || human);
+      const isLast = i === steps.length - 1;
+      return `<div class="step-tile">
+        <div class="step-rail"><span class="step-dot"></span>${isLast ? '' : '<span class="step-line"></span>'}</div>
+        <div class="step-body">
+          <div class="step-stamp"><span class="step-stamp-num">${String(startNum + i).padStart(2, '0')}</span><span class="step-stamp-div">·</span><span class="step-stamp-action">${escapeHtml(action)}</span></div>
+          <div class="step-target">${target}</div>
+        </div>
+      </div>`;
+    }).join('');
   }
 
-  function renderRecPopoverList(payload) {
-    if (!recPopoverEl) return;
-    const list = recPopoverEl.querySelector('.rec-popover-list');
-    if (!list) return;
-    if (!payload || !payload.steps || payload.steps.length === 0) {
-      list.innerHTML = '<div class="rec-popover-list-empty">No steps yet on the recorded path.</div>';
+  function renderRecIndicator() {
+    const live = STATE.recorder.active;
+    if (!live) {
+      if (recIndicatorEl) { recIndicatorEl.remove(); recIndicatorEl = null; }
       return;
     }
-    const startNum = Math.max(1, payload.steps.length - 99);
-    list.innerHTML = payload.steps
-      .map((s, i) => `<div class="rec-step"><span class="rec-step-n">${startNum + i}.</span><span class="rec-step-text">${renderInlineMd(s.humanText || '')}</span></div>`)
-      .join('');
-    // Scroll to the latest step.
-    list.scrollTop = list.scrollHeight;
+    const expanded = STATE.recIndicatorExpanded;
+    if (!recIndicatorEl) {
+      recIndicatorEl = document.createElement('div');
+      recIndicatorEl.className = 'rec-indicator';
+      chrome.appendChild(recIndicatorEl);
+    }
+    recIndicatorEl.classList.toggle('expanded', expanded);
+    const count = STATE.recorder.count;
+    const countLabel = `${count} step${count === 1 ? '' : 's'}`;
+    const redactChip = STATE.recorder.redactionCount > 0
+      ? `<span class="rec-redact-chip" title="${STATE.recorder.redactionCount} value(s) redacted from captured fields">${STATE.recorder.redactionCount} redacted</span>`
+      : '';
+    recIndicatorEl.innerHTML = `
+      <div class="rec-ind-pill" id="recIndPill">
+        <span class="rec-ind-dot"></span>
+        <span class="rec-ind-label">Recording</span>
+        <span class="rec-ind-count">${countLabel}</span>
+        <span class="rec-ind-chev">${ICON_CHEV_DOWN}</span>
+      </div>
+      ${expanded ? `
+      <div class="rec-ind-panel">
+        <div class="rec-ind-panel-head">
+          <span class="rec-ind-panel-title">Recorded path</span>
+          ${redactChip}
+          <button class="rec-ind-discard" data-act="ind-discard" title="Discard recording">${ICON_TRASH}</button>
+        </div>
+        <div class="rec-ind-list" id="recIndList"><div class="rec-ind-empty">Loading…</div></div>
+      </div>` : ''}
+    `;
+    if (expanded) refreshIndicatorSteps();
   }
 
-  async function refreshRecPopoverList() {
-    if (!recPopoverEl) return;
+  async function refreshIndicatorSteps() {
+    const list = recIndicatorEl && recIndicatorEl.querySelector('#recIndList');
+    if (!list) return;
     try {
       const payload = await window.__designQA_fetchRecorderSteps();
-      renderRecPopoverList(payload);
+      const steps = payload && Array.isArray(payload.steps) ? payload.steps : [];
+      if (steps.length === 0) {
+        list.innerHTML = '<div class="rec-ind-empty">No steps yet on the recorded path.</div>';
+      } else {
+        list.innerHTML = stepTilesHTML(steps);
+        list.scrollTop = list.scrollHeight;
+      }
     } catch (err) {
       console.warn('design-qa: fetchRecorderSteps failed', err);
     }
   }
 
-  function positionRecPopover() {
-    if (!recPopoverEl) return;
-    const top = panel.getBoundingClientRect().bottom + 6;
-    recPopoverEl.style.top = `${top}px`;
-  }
-
-  function openRecordingPopover() {
-    if (recPopoverEl) return;
-    // Persist open state Node-side so it survives navigation. See
-    // `__designQA_setUiState` in lib/capture.mjs.
+  function toggleRecIndicator() {
+    STATE.recIndicatorExpanded = !STATE.recIndicatorExpanded;
     if (typeof window.__designQA_setUiState === 'function') {
-      window.__designQA_setUiState({ popoverOpen: true }).catch(() => {});
+      window.__designQA_setUiState({ recIndicatorExpanded: STATE.recIndicatorExpanded }).catch(() => {});
     }
-    recPopoverEl = document.createElement('div');
-    recPopoverEl.className = 'rec-popover';
-    recPopoverEl.innerHTML = `
-      <div class="rec-popover-header">
-        <div class="rec-popover-title">Recording</div>
-        <button class="rec-popover-close" id="recPopoverCloseBtn" title="Close">${ICON_X}</button>
-      </div>
-      <div class="rec-popover-meta">Loading…</div>
-      <div class="rec-popover-list"><div class="rec-popover-list-empty">Loading…</div></div>
-      <div class="rec-popover-actions">
-        <button class="ghost" id="recResetBtn" title="Move the start of recording to now">Reset start here</button>
-        <button class="ghost" id="recStopBtn" title="Finish recording — keep the recorded path the engineer will replay">Stop recording</button>
-        <button class="danger" id="recDiscardBtn" title="Throw away the recorded path — captured steps move to preconditions as hints">Discard</button>
-      </div>
-    `;
-    chrome.appendChild(recPopoverEl);
-    positionRecPopover();
-    renderRecPopoverMeta();
-    refreshRecPopoverList();
-
-    // Stopwatch tick — only while popover is open AND active.
-    if (recStopwatchTimer) clearInterval(recStopwatchTimer);
-    recStopwatchTimer = setInterval(() => {
-      if (!recPopoverEl) return;
-      if (!STATE.recorder.active) return;
-      renderRecPopoverMeta();
-    }, 1000);
-  }
-
-  function closeRecordingPopover() {
-    if (!recPopoverEl) return;
-    recPopoverEl.remove();
-    recPopoverEl = null;
-    if (recStopwatchTimer) { clearInterval(recStopwatchTimer); recStopwatchTimer = null; }
-    if (typeof window.__designQA_setUiState === 'function') {
-      window.__designQA_setUiState({ popoverOpen: false }).catch(() => {});
-    }
+    renderRecIndicator();
   }
 
   // Node → shadow push setter, called via page.evaluate from capture.mjs.
-  // Defensive: state may be partial; merge into the current STATE.recorder.
   window.__designQA_setRecorderState = (state) => {
     if (!state || typeof state !== 'object') return;
     STATE.recorder = {
@@ -1266,98 +1224,18 @@
       startedAtMs: typeof state.startedAtMs === 'number' ? state.startedAtMs : null,
       redactionCount: Number.isFinite(state.redactionCount) ? state.redactionCount : 0,
     };
-    renderRecorderChip();
-    if (recPopoverEl) {
-      renderRecPopoverMeta();
-      // Re-fetch list — count changed means a new step may have landed.
-      refreshRecPopoverList();
-      // Active flipped to false? Close the popover (nothing to show).
-      if (!STATE.recorder.active) closeRecordingPopover();
-    } else if (STATE.pendingPopoverRestore && STATE.recorder.active) {
-      // Boot-time restore intent finally has the state it was waiting for.
-      // Open now and clear the flag so a later push doesn't reopen after the
-      // user manually closes.
-      STATE.pendingPopoverRestore = false;
-      openRecordingPopover();
-    }
+    renderRecButton();
+    renderRecIndicator();
   };
 
-  // Chip click: resting → call Mark-start binding; active → toggle popover.
-  async function onRecChipClick() {
-    if (STATE.recorder.active) {
-      if (recPopoverEl) closeRecordingPopover();
-      else openRecordingPopover();
-      return;
-    }
-    try { await window.__designQA_markStart(); }
-    catch (err) { console.warn('design-qa: markStart failed', err); }
-    // The state push from Node will flip the chip; no manual update needed.
-  }
-
-  async function onRecPopoverClick(e) {
-    const btn = e.target?.closest?.('button');
-    if (!btn) return;
-    const id = btn.id;
-    if (id === 'recPopoverCloseBtn') { closeRecordingPopover(); return; }
-    if (id === 'recResetBtn') {
-      try { await window.__designQA_markStart(); }
-      catch (err) { console.warn('design-qa: markStart (reset) failed', err); }
-      return;
-    }
-    if (id === 'recStopBtn') {
-      // 9f: "Stop recording" now FINALIZES-KEEP — locks the recorded path,
-      // doesn't dump it. (__designQA_stopRecording maps to finalizeRecording.)
-      try { await window.__designQA_stopRecording(); }
-      catch (err) { console.warn('design-qa: finalize recording failed', err); }
-      // The push handler closes the popover when active flips false.
-      return;
-    }
-    if (id === 'recDiscardBtn') {
-      // 9f: the explicit throw-away. Confirm first (it empties the recorded
-      // path); native confirm() is auto-dismissed by Playwright, so use the
-      // shadow-DOM confirmModal.
-      const ok = await confirmModal({
-        title: 'Discard recording?',
-        body: 'The recorded path will be cleared. Captured steps move to preconditions as hints. This can’t be undone here.',
-        confirmLabel: 'Discard',
-        danger: true,
-      });
-      if (!ok) return;
-      try { await window.__designQA_discardRecording(); }
-      catch (err) { console.warn('design-qa: discardRecording failed', err); }
-      // The push handler closes the popover when active flips false.
-      return;
-    }
-  }
-
-  // Keep the popover anchored to the panel as the panel resizes/expands.
-  const recReposObs = new ResizeObserver(() => positionRecPopover());
-  recReposObs.observe(panel);
-
-  // ------- end Spike 8 popover ----------------------------------------
-
-  function focusPinFromInspector(pinId, viewId) {
-    if (viewId === STATE.viewId) {
-      const pin = STATE.pins.find((p) => p.id === pinId);
-      if (pin) {
-        STATE.activePinId = pinId;
-        renderPins();
-        renderPopover();
-        window.scrollTo({ left: pin.x - window.innerWidth / 2, top: pin.y - window.innerHeight / 2, behavior: 'smooth' });
-      }
-    }
-    renderInspector();
-  }
-
-  // ------- Placement mode ----------------------------------------------
+  // ------- Placement mode -----------------------------------------------
 
   function setPlacementMode(on) {
     STATE.placementMode = on;
-    const btn = $('addBtn');
+    const btn = $('commentBtn');
     if (btn) {
-      btn.innerHTML = on ? CANCEL_LABEL : ADD_LABEL;
       btn.classList.toggle('active', on);
-      btn.title = on ? 'Cancel comment placement' : 'Click, then click on the page to drop a comment';
+      btn.title = on ? 'Cancel comment placement' : 'Comment — click, then click on the page';
     }
     if (on) {
       placementOverlay = document.createElement('div');
@@ -1383,32 +1261,86 @@
     const x = e.clientX + window.scrollX;
     const y = e.clientY + window.scrollY;
     setPlacementMode(false);
-
     // Render a temp pin locally + open the composer. Neither the view nor the
-    // pin is created server-side until the user clicks Send with non-empty
-    // text. Dismissal (Esc, click-outside, Cancel) discards both.
+    // pin is created server-side until the user sends non-empty text.
     const tId = tempId();
-    STATE.pins.push({ id: tId, x, y, note: '' });
+    STATE.pins.push({ id: tId, x, y, note: '', category: null });
     STATE.activePinId = tId;
+    STATE.editing = false;
     renderPins();
     renderPopover();
   }
 
-  // ------- Panel toggle -------------------------------------------------
+  // ------- Toolbar drag -------------------------------------------------
 
-  function setInspectorExpanded(expanded) {
-    STATE.inspectorExpanded = expanded;
-    panel.classList.toggle('collapsed', !expanded);
-    const btn = $('toggleBtn');
-    if (btn) {
-      btn.innerHTML = expanded ? ICON_CHEVRON_UP : ICON_CHEVRON_DOWN;
-      btn.title = expanded ? 'Hide screens & pins' : 'Show screens & pins';
+  let dragRef = null;
+
+  function clampToViewport(x, y, w, h) {
+    return {
+      x: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
+    };
+  }
+
+  function applyToolbarPos(pos) {
+    if (pos && typeof pos.x === 'number' && typeof pos.y === 'number') {
+      const r = toolbar.getBoundingClientRect();
+      const c = clampToViewport(pos.x, pos.y, r.width || 320, r.height || 40);
+      STATE.toolbarPos = c;
+      toolbar.style.left = c.x + 'px';
+      toolbar.style.top = c.y + 'px';
+      toolbar.style.bottom = 'auto';
+      toolbar.style.transform = 'none';
+    } else {
+      STATE.toolbarPos = null;
+      toolbar.style.left = '50%';
+      toolbar.style.top = '16px';
+      toolbar.style.bottom = 'auto';
+      toolbar.style.transform = 'translateX(-50%)';
     }
-    // Push to Node so the state survives ANY navigation, including cross-origin
-    // (e.g. auth redirects) where localStorage would reset. Fire-and-forget;
-    // failure here is purely cosmetic — next nav re-pulls whatever Node has.
-    if (typeof window.__designQA_setUiState === 'function') {
-      window.__designQA_setUiState({ panelExpanded: expanded }).catch(() => {});
+  }
+
+  function onGripDown(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const grip = e.currentTarget;
+    const r = toolbar.getBoundingClientRect();
+    dragRef = { dx: e.clientX - r.left, dy: e.clientY - r.top, w: r.width, h: r.height, grip, pointerId: e.pointerId };
+    STATE.dragging = true;
+    toolbar.classList.add('dragging');
+    // Switch to explicit positioning at the current spot.
+    applyToolbarPos({ x: r.left, y: r.top });
+    // Capture the pointer so move/up route back to the grip even when the
+    // toolbar slides out from under the cursor or the page would swallow them.
+    grip.setPointerCapture?.(e.pointerId);
+    grip.addEventListener('pointermove', onGripMove);
+    grip.addEventListener('pointerup', onGripUp);
+    grip.addEventListener('pointercancel', onGripUp);
+  }
+
+  function onGripMove(e) {
+    if (!dragRef) return;
+    const c = clampToViewport(e.clientX - dragRef.dx, e.clientY - dragRef.dy, dragRef.w, dragRef.h);
+    STATE.toolbarPos = c;
+    toolbar.style.left = c.x + 'px';
+    toolbar.style.top = c.y + 'px';
+    toolbar.style.bottom = 'auto';
+    toolbar.style.transform = 'none';
+  }
+
+  function onGripUp() {
+    if (!dragRef) return;
+    const { grip, pointerId } = dragRef;
+    STATE.dragging = false;
+    dragRef = null;
+    toolbar.classList.remove('dragging');
+    grip.releasePointerCapture?.(pointerId);
+    grip.removeEventListener('pointermove', onGripMove);
+    grip.removeEventListener('pointerup', onGripUp);
+    grip.removeEventListener('pointercancel', onGripUp);
+    if (typeof window.__designQA_setUiState === 'function' && STATE.toolbarPos) {
+      window.__designQA_setUiState({ toolbarPos: STATE.toolbarPos }).catch(() => {});
     }
   }
 
@@ -1430,36 +1362,17 @@
     }
   }
 
-  async function refreshSession() {
-    try {
-      STATE.session = await window.__designQA_listSession({});
-      renderInspector();
-    } catch (err) {
-      console.warn('design-qa: list failed', err);
-    }
-  }
-
   function waitForBindings() {
     return new Promise((resolve) => {
+      const need = [
+        '__designQA_loadForUrl', '__designQA_ensureView', '__designQA_createPin',
+        '__designQA_updatePin', '__designQA_deletePin', '__designQA_startNewView',
+        '__designQA_sealCurrentView', '__designQA_markStart', '__designQA_stopRecording',
+        '__designQA_discardRecording', '__designQA_fetchRecorderSteps',
+        '__designQA_getUiState', '__designQA_setUiState',
+      ];
       const check = () => {
-        if (
-          typeof window.__designQA_loadForUrl === 'function' &&
-          typeof window.__designQA_ensureView === 'function' &&
-          typeof window.__designQA_createPin === 'function' &&
-          typeof window.__designQA_updatePin === 'function' &&
-          typeof window.__designQA_deletePin === 'function' &&
-          typeof window.__designQA_renameView === 'function' &&
-          typeof window.__designQA_deleteView === 'function' &&
-          typeof window.__designQA_startNewView === 'function' &&
-          typeof window.__designQA_sealCurrentView === 'function' &&
-          typeof window.__designQA_navigateTo === 'function' &&
-          typeof window.__designQA_listSession === 'function' &&
-          // UI-state bindings — added with the cross-nav persistence fix.
-          // Without these the overlay reverts to collapsed-panel + closed-
-          // popover on every page load.
-          typeof window.__designQA_getUiState === 'function' &&
-          typeof window.__designQA_setUiState === 'function'
-        ) resolve();
+        if (need.every((n) => typeof window[n] === 'function')) resolve();
         else setTimeout(check, 50);
       };
       check();
@@ -1479,30 +1392,34 @@
   window.__designQA = {
     setChromeVisible(visible) {
       // Hides both chrome AND pin-layer. Pins are overlaid in the artifact
-      // from session.json coords; we don't want them baked into the PNG too.
+      // from session.json coords; we don't bake them into the PNG too.
       root.classList.toggle('capture-mode', !visible);
     },
   };
 
   // ------- Event wiring -------------------------------------------------
 
-  panel.addEventListener('click', (e) => {
-    const btn = e.target?.closest?.('button');
-    if (!btn) return;
-    const id = btn.id;
-    if (id === 'addBtn') { setDoneConfirm(false); setPlacementMode(!STATE.placementMode); return; }
-    if (id === 'toggleBtn') { setInspectorExpanded(!STATE.inspectorExpanded); return; }
+  $('gripBtn').addEventListener('pointerdown', onGripDown);
+
+  toolbar.addEventListener('click', (e) => {
+    const id = e.target?.closest?.('[id]')?.id;
+    if (id === 'commentBtn') { setPlacementMode(!STATE.placementMode); return; }
+    if (id === 'newScreenBtn') { requestNewScreen(); return; }
+    if (id === 'recBtn') { onRecToggle(); return; }
     if (id === 'doneBtn') { requestDone(); return; }
-    if (id === 'doneCancelBtn') { setDoneConfirm(false); return; }
-    if (id === 'doneConfirmBtn') { performDone(); return; }
-    if (id === 'newViewBtn') { setDoneConfirm(false); startNewScreenHere(); return; }
-    if (id === 'recBtn') { onRecChipClick(); return; }
   });
 
-  // The recording popover sits in `chrome` (sibling of panel), so panel's
-  // delegation doesn't reach it. Wire its own listener.
+  // Indicator clicks live in `chrome` (sibling of toolbar) — wire separately.
+  // The Discard action sits inside the expanded panel; intercept it before the
+  // pill-toggle so opening the menu doesn't also collapse the indicator.
   chrome.addEventListener('click', (e) => {
-    if (recPopoverEl && recPopoverEl.contains(e.target)) onRecPopoverClick(e);
+    if (e.target?.closest?.('[data-act="ind-discard"]')) { e.stopPropagation(); discardRecording(); return; }
+    if (recIndicatorEl && e.target?.closest?.('#recIndPill')) toggleRecIndicator();
+  });
+
+  // Keep an explicitly-positioned toolbar on-screen across viewport resizes.
+  window.addEventListener('resize', () => {
+    if (STATE.toolbarPos && !STATE.dragging) applyToolbarPos(STATE.toolbarPos);
   });
 
   // ------- Boot ---------------------------------------------------------
@@ -1510,32 +1427,29 @@
   (async () => {
     attachHost();
     await waitForBindings();
-    // Pull the UI state Node has been holding for us. On the first page of a
-    // session both are false (defaults in capture.mjs); on every subsequent
-    // navigation they reflect whatever the user had open / expanded before
-    // navigating, including across cross-origin nav (where localStorage
-    // wouldn't have survived). Errors are swallowed — falling back to
-    // defaults is fine if the binding ever fails.
-    let ui = { panelExpanded: false, popoverOpen: false };
+    // Pull the UI state Node has held across navigation: toolbar position +
+    // recording-indicator expanded flag. Defaults on the first page of a
+    // session; survives cross-origin nav (where localStorage wouldn't).
+    let ui = { toolbarPos: null, recIndicatorExpanded: false };
     try { ui = await window.__designQA_getUiState(); } catch {}
-    setInspectorExpanded(!!ui.panelExpanded);
+    STATE.recIndicatorExpanded = !!ui.recIndicatorExpanded;
+    // Defer position restore one frame so the toolbar has laid out (clamp reads
+    // its measured width/height).
+    requestAnimationFrame(() => applyToolbarPos(ui.toolbarPos));
+    renderRecButton();
+    renderRecIndicator();
     await loadExistingPins();
-    await refreshSession();
-    // Defer popover restore until the panel is laid out — the popover
-    // anchors to it via positionRecPopover, which reads layout. rAF is enough.
-    // If recording is already active (state push beat us), open immediately;
-    // otherwise stash the intent and let the setRecorderState setter retry
-    // when active flips true (push is throttled 200ms — we'd otherwise race).
-    if (ui.popoverOpen) {
-      STATE.pendingPopoverRestore = true;
-      requestAnimationFrame(() => {
-        if (STATE.recorder?.active && STATE.pendingPopoverRestore) {
-          STATE.pendingPopoverRestore = false;
-          openRecordingPopover();
-        }
-      });
+
+    // Re-attach the host if the page rips out / replaces the body subtree.
+    // Guarded: a transient null root would otherwise throw at observe().
+    try {
+      const target = document.documentElement || document.body;
+      if (target) {
+        const obs = new MutationObserver(() => attachHost());
+        obs.observe(target, { childList: true, subtree: false });
+      }
+    } catch (e) {
+      console.warn('design-qa: host observer setup failed', e);
     }
-    const obs = new MutationObserver(() => attachHost());
-    obs.observe(document.documentElement, { childList: true, subtree: false });
   })();
 })();

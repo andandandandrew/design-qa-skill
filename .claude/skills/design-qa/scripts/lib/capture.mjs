@@ -302,26 +302,29 @@ export async function attachCapture(store, {
   schedulePushRecorderState();    // initial state push to any already-open pages
   // ---------- end Spike 8 setup ----------
 
-  // Hide Playwright's in-page recorder UI. `recorderMode: 'api'` suppresses
-  // the separate Inspector window but the recorder still injects an in-page
-  // "glass" (highlight + selector tooltip + action point) via custom elements
-  // under `<x-pw-*>` names. We don't want it competing with our overlay, so
-  // we run a CSS stylesheet at document_start that hides them everywhere.
-  // Pattern-matching on the tag prefix (with a class fallback) catches new
-  // x-pw-* elements without us having to keep an exact allowlist in sync.
-  await context.addInitScript(() => {
-    const HIDE_CSS = `
-      x-pw-glass, x-pw-tool-overlay, x-pw-tooltip, x-pw-highlight,
-      x-pw-action-point, x-pw-pollinger,
-      [is^="x-pw-"], [class*="x-pw-"], [data-pw-recorder] {
-        display: none !important;
-        opacity: 0 !important;
-        pointer-events: none !important;
-      }
-    `;
+  // Hide Playwright's in-page recorder UI. `recorderMode: 'api'` suppresses the
+  // separate Inspector window, but the recorder STILL mounts its full in-page UI
+  // — the floating toolbar (record / pick-locator / assert-visibility/-text/
+  // -value / copy-source controls), the hover highlight, the selector tooltip
+  // and action points — and it puts ALL of it inside ONE host element,
+  // `<x-pw-glass>`, appended to <html> with a CLOSED shadow root and shown via
+  // the Popover API (`popover="manual"` + an inline `display:flex`). Document
+  // CSS can't reach into the closed shadow, but it CAN hide the host, which
+  // collapses the entire tree: `display:none !important` beats both the inline
+  // `display:flex` and the `:popover-open` UA rule. (We list a few legacy
+  // top-level hosts too so the rule survives a Playwright version bump; the
+  // inner x-pw-* tags are unreachable from here and would be dead selectors.)
+  // Recording is unaffected — the glass is purely visual; events are captured
+  // by injected listeners, and clicks on it are already dropped by
+  // isOverlayAction's `x-pw-` match.
+  const HIDE_PW_CSS =
+    'x-pw-glass, x-pw-overlay, x-pw-highlight, x-pw-tooltip, x-pw-dialog, ' +
+    'x-pw-action-point, [data-pw-recorder] { ' +
+    'display: none !important; opacity: 0 !important; pointer-events: none !important; }';
+  await context.addInitScript((css) => {
     const style = document.createElement('style');
     style.id = '__designQA_hide_pw_recorder';
-    style.textContent = HIDE_CSS;
+    style.textContent = css;
     // documentElement may not exist yet at the earliest injection moments —
     // append to documentElement when ready, otherwise wait.
     const attach = () => {
@@ -330,7 +333,7 @@ export async function attachCapture(store, {
       else setTimeout(attach, 0);
     };
     attach();
-  });
+  }, HIDE_PW_CSS);
 
   // Inject overlay into every page. addInitScript applies to future
   // navigations; we'll separately inject into already-open pages below.
@@ -393,14 +396,26 @@ export async function attachCapture(store, {
   // popover had no persistence at all and always reopened closed. Now we
   // store it in this process for the session lifetime; the overlay pulls
   // on init and pushes on every toggle.
-  const overlayUiState = { panelExpanded: false, popoverOpen: false };
+  // Phase-8 overlay rebuild: the top-right collapsible inspector is gone (review
+  // moved to the console), so the persisted UI state is now the draggable
+  // mini-toolbar's position and the top recording-indicator's expanded flag.
+  // `toolbarPos` is viewport-coords {x,y} (the overlay re-clamps on restore) or
+  // null = default bottom-center; `recIndicatorExpanded` survives navigation so
+  // the step list stays open across page loads.
+  const overlayUiState = { toolbarPos: null, recIndicatorExpanded: false };
 
   await context.exposeBinding('__designQA_getUiState', () => ({ ...overlayUiState }));
 
   await context.exposeBinding('__designQA_setUiState', (_src, patch) => {
     if (!patch || typeof patch !== 'object') return overlayUiState;
-    if (typeof patch.panelExpanded === 'boolean') overlayUiState.panelExpanded = patch.panelExpanded;
-    if (typeof patch.popoverOpen === 'boolean') overlayUiState.popoverOpen = patch.popoverOpen;
+    if ('toolbarPos' in patch) {
+      const p = patch.toolbarPos;
+      overlayUiState.toolbarPos =
+        p && typeof p.x === 'number' && typeof p.y === 'number' ? { x: p.x, y: p.y } : null;
+    }
+    if (typeof patch.recIndicatorExpanded === 'boolean') {
+      overlayUiState.recIndicatorExpanded = patch.recIndicatorExpanded;
+    }
     return overlayUiState;
   });
 
@@ -466,8 +481,8 @@ export async function attachCapture(store, {
     };
   });
 
-  await context.exposeBinding('__designQA_createPin', async ({ page }, { viewId, x, y, note }) => {
-    const pin = await store.createPin({ viewId, x, y, note });
+  await context.exposeBinding('__designQA_createPin', async ({ page }, { viewId, x, y, note, category }) => {
+    const pin = await store.createPin({ viewId, x, y, note, category });
     viewPages.set(viewId, page);
     const view = store.findViewById(viewId);
     // Capture a chrome-hidden fullPage of the live (stable) page. Pins are NOT
@@ -481,8 +496,8 @@ export async function attachCapture(store, {
     return { pinId: pin.id };
   });
 
-  await context.exposeBinding('__designQA_updatePin', async ({ page }, { pinId, note, x, y }) => {
-    const pin = await store.updatePin({ pinId, note, x, y });
+  await context.exposeBinding('__designQA_updatePin', async ({ page }, { pinId, note, x, y, category }) => {
+    const pin = await store.updatePin({ pinId, note, x, y, category });
     // A drag changes pin coords, not page content — but refresh (debounced) in
     // case the page scrolled. Note edits don't touch the screenshot at all.
     if (typeof x === 'number' || typeof y === 'number') scheduleScreenshot(pin.viewId, page);
@@ -674,8 +689,13 @@ export async function attachCapture(store, {
   context.on('page', attachPage);
   for (const page of context.pages()) {
     attachPage(page);
-    // Already-open pages (e.g. the default tab from launchPersistentContext)
-    // missed addInitScript; inject the overlay directly into them.
+    // Already-open pages (e.g. the default about:blank tab from
+    // launchPersistentContext) predate BOTH addInitScripts, so the recorder's
+    // <x-pw-glass> toolbar shows un-hidden there. Back-fill the hide CSS (and
+    // our overlay) directly into them.
+    try { await page.addStyleTag({ content: HIDE_PW_CSS }); } catch (err) {
+      console.warn('capture: initial pw-UI hide failed:', err.message);
+    }
     if (injectOverlay) {
       try { await page.addScriptTag({ content: overlayScript }); } catch (err) {
         console.warn('capture: initial overlay inject failed:', err.message);

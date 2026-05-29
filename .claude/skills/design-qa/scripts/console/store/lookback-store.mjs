@@ -65,6 +65,7 @@ export class LookbackStore {
   movePin(args) { return this._mutate('movePin', args); }
   resolvePin(args) { return this._mutate('resolvePin', args); }
   deletePin(args) { return this._mutate('deletePin', args); }
+  deleteView(args) { return this._mutate('deleteView', args); }
 
   // Spike 8 / 9d — same step-authoring ops the live HttpStore exposes; each
   // hits /api/mutate?id=<basename>. Lookback editing is fully writable per

@@ -29,6 +29,7 @@ const CONSOLE_DIR = path.resolve(HERE, '..', 'console');
 // keeps it readable.
 const SHARED_MODULES = [
   'lib/dom.mjs', 'lib/coords.mjs', 'lib/events.mjs',
+  'ui/icons.mjs', 'ui/menu.mjs',
   'ui/recorder-format.mjs', 'ui/preview-spec.mjs', 'ui/steps.mjs',
   'ui/sidebar.mjs', 'ui/canvas.mjs', 'ui/comments.mjs', 'ui/resizers.mjs', 'ui/toast.mjs',
   'core.mjs', 'store/local-resolve.mjs', 'store/artifact-store.mjs',
@@ -111,6 +112,8 @@ async function buildEmbeddedSession(sessionDir, session) {
       // Everything in the export is frozen; ensure a sealedAt so nothing reads
       // as a live/locked screen if reopened in a console-shaped renderer.
       sealedAt: view.sealedAt || session.endedAt || view.createdAt || null,
+      // Recorded Playwright steps power the read-only Steps tab in the artifact.
+      steps: Array.isArray(view.steps) ? view.steps : [],
       pins: view.pins.map((p) => ({
         id: p.id,
         viewId: view.id,
@@ -139,7 +142,14 @@ async function buildEmbeddedSession(sessionDir, session) {
 export async function buildArtifact({ sessionDir, session, outPath }) {
   const embedded = await buildEmbeddedSession(sessionDir, session);
   const moduleImports = await inlineModules();
-  const styles = await fs.readFile(path.join(CONSOLE_DIR, 'styles.css'), 'utf8');
+  // DesignOS foundation is inlined ahead of app styles, same order as the
+  // console's <link> chain: tokens (vars) → base (primitives) → styles (app).
+  // base.css ships with relative-color pre-resolved + its font @import lifted
+  // to <head>, so this concatenated <style> is valid + portable on file://.
+  const styles = (await Promise.all(
+    ['tokens.css', 'base.css', 'styles.css'].map((f) =>
+      fs.readFile(path.join(CONSOLE_DIR, f), 'utf8')),
+  )).join('\n');
   const html = renderHtml(embedded, moduleImports, styles);
   await fs.writeFile(outPath, html, 'utf8');
   return outPath;
@@ -254,55 +264,79 @@ function renderHtml(session, moduleImports, styles) {
   const importMap = JSON.stringify({ imports: moduleImports }).replace(/</g, '\\u003c');
 
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark" data-surface="cool" data-shadows="default" data-density="comfortable">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${title}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
 <style>
 ${styles}</style>
 </head>
 <body>
-<div class="app">
-  <header class="topbar">
-    <span class="session-name" id="sessionName">Design QA</span>
-    <span class="sidebar-meta mono" id="sessionMeta"></span>
-    <span class="spacer"></span>
-    <span class="sidebar-meta mono">${fmtDate(session.createdAt)} · ${viewCount} ${viewCount === 1 ? 'screen' : 'screens'} · ${pinCount} ${pinCount === 1 ? 'pin' : 'pins'}</span>
-  </header>
+<!-- DesignOS App Frame (read-mostly artifact: no Share / live / add-pin). Mirrors
+     console/index.html so the same render modules drive both surfaces. -->
+<div class="app" id="app">
   <div class="body">
-    <aside class="sidebar">
-      <div class="sidebar-header">
-        <div class="sidebar-title">Screens</div>
-        <div class="sidebar-meta" id="sidebarMeta"></div>
+    <aside class="sidebar" id="leftSidebar">
+      <div class="brand-row">
+        <span class="brand-mark" title="Design QA">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .962 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.962 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>
+        </span>
       </div>
+      <div class="file-header">
+        <div class="file-name-row"><span class="file-name" id="sessionName">Design QA</span></div>
+        <div class="file-sub" id="sessionMeta"></div>
+      </div>
+      <div class="sidebar-search">
+        <span class="search-well">
+          <svg class="search-ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input class="search-input" id="screenSearch" type="text" placeholder="Search screens" autocomplete="off">
+        </span>
+      </div>
+      <div class="section-header"><span class="eyebrow" id="sidebarMeta">Screens</span></div>
       <div class="view-list" id="viewList"></div>
     </aside>
 
     <main class="canvas-pane">
-      <div class="canvas-toolbar">
-        <span class="hint" id="canvasHint">Click a pin to read it.</span>
-      </div>
-      <div class="canvas" id="canvas"></div>
+      <div class="canvas dotgrid" id="canvas"></div>
+      <div class="canvas-cluster"><span class="cluster-hint" id="canvasHint">Click a pin to read it.</span></div>
     </main>
 
-    <aside class="comments">
-      <div class="comments-header">
-        <div class="comments-title">Comments</div>
-        <div class="comments-page" id="commentsPage">—</div>
+    <aside class="comments" id="rightPane">
+      <div class="tabs" role="tablist">
+        <button class="tab active" id="tabComments" role="tab" data-tab="comments">Comments</button>
+        <button class="tab" id="tabSteps" role="tab" data-tab="steps">Steps</button>
       </div>
-      <div class="comments-filters">
-        <select class="select" id="filterStatus">
-          <option value="all">All statuses</option>
-          <option value="open">Open</option>
-          <option value="resolved">Resolved</option>
-        </select>
-        <select class="select" id="filterCategory"><option value="all">All categories</option></select>
-        <select class="select" id="sortBy">
-          <option value="created">Sort: created</option>
-          <option value="status">Sort: status</option>
-          <option value="category">Sort: category</option>
-        </select>
+      <div class="comments-search-row" id="commentsSearchRow">
+        <span class="search-well">
+          <svg class="search-ic" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+          <input class="search-input" id="commentSearch" type="text" placeholder="Search comments" autocomplete="off">
+        </span>
+        <button class="icon-btn" id="overflowBtn" title="Filters & sort" aria-haspopup="true" aria-expanded="false">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></svg>
+        </button>
+        <div class="overflow-menu" id="overflowMenu" hidden>
+          <label class="overflow-row"><span>Status</span>
+            <select class="select" id="filterStatus">
+              <option value="all">All statuses</option>
+              <option value="open">Open</option>
+              <option value="resolved">Resolved</option>
+            </select>
+          </label>
+          <label class="overflow-row"><span>Category</span>
+            <select class="select" id="filterCategory"><option value="all">All categories</option></select>
+          </label>
+          <label class="overflow-row"><span>Sort</span>
+            <select class="select" id="sortBy">
+              <option value="created">Created</option>
+              <option value="status">Status</option>
+              <option value="category">Category</option>
+            </select>
+          </label>
+        </div>
       </div>
       <div class="comments-list" id="commentsList"></div>
     </aside>
