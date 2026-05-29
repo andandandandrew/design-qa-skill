@@ -1,154 +1,144 @@
 /**
- * `▸ Steps (N)` disclosure for the active screen (Spike 8, phase 9d).
+ * Steps tab (Phase 8) — the recorded Playwright steps for the active screen,
+ * styled as the DesignOS "Sidebar Steps" composite (src/app/steps-panel.jsx):
+ * a left dot/line **timeline rail** + per-step `NN · <action>` stamp, a bold
+ * target line, and a quiet selector/meta line. Console-authored steps keep the
+ * edit-label / omit affordances (hover); the read-only artifact shows them flat.
  *
- * Mounted by `renderComments()` at the top of the comments pane — above the
- * per-pin cards. The disclosure shows the steps the recorder captured for
- * THIS view (sealed views) or the running buffer (live views), each with
- * inline `[edit]` for the human label and `[×]` to omit (struck-through with
- * a Figma-style Undo toast, same pattern as resolve).
- *
- * The recorder's `code` field stays authoritative — `[edit]` only overrides
- * the human-readable label (persisted as `step.humanText`); absent → fall
- * back to `describeAction(step)` which the capture-side popover uses too.
- *
- * Feature-detects on the store: if `store.editStepText` isn't a function
- * (MemoryStore fixture path), the disclosure renders read-only.
- *
- * `[Preview spec]` is inline with the disclosure row per design doc §7.
- * The modal it opens scopes to THIS screen's checkpoint test (9g) — the
- * cumulative path that reaches the feedback on this view, not the whole file.
+ * `code` stays authoritative; `[edit]` overrides only the human label
+ * (persisted as `step.humanText`). Mapping from our recorder fields to the
+ * tile's (action / target / meta) lives in `tileParts`.
  */
 import { el } from '../lib/dom.mjs';
 import { showToast } from './toast.mjs';
-import { describeAction } from './recorder-format.mjs';
+import { selectorLabel } from './recorder-format.mjs';
 import { openPreviewSpec } from './preview-spec.mjs';
 
-/** Build the disclosure node for the active view, or null if nothing to show. */
-export function renderStepsDisclosure(ctx) {
-  const view = ctx.activeView();
-  if (!view) return null;
+/** Steps TAB body — returns an array of nodes (head + timeline, or empty). */
+export function renderStepsTab(ctx, view) {
   const steps = Array.isArray(view.steps) ? view.steps : [];
-  // Hide entirely when there are no captured steps AND no preview to offer.
-  // Lookback / live with no recording is the common case for older sessions.
   const previewAvailable = typeof ctx.store.fetchRecordingPreview === 'function';
-  if (steps.length === 0 && !previewAvailable) return null;
-
-  const stepsOpen = ensureStepsOpenMap(ctx);
-  const open = stepsOpen.get(view.id) === true;
   const canEdit = typeof ctx.store.editStepText === 'function'
     && typeof ctx.store.omitStep === 'function';
 
-  const toggle = el('button', {
-    class: 'steps-toggle',
-    'aria-expanded': String(open),
-    title: open ? 'Hide steps' : 'Show steps',
-    onclick: (e) => {
-      e.stopPropagation();
-      stepsOpen.set(view.id, !open);
-      ctx.render();
-    },
-  }, `${open ? '▾' : '▸'} Steps (${steps.length})`);
-
-  const previewBtn = previewAvailable
-    ? el('button', {
-        class: 'steps-preview-btn',
-        title: 'Preview the checkpoint test that reaches this screen in recording.spec.ts',
-        onclick: (e) => { e.stopPropagation(); openPreviewSpec(ctx, view); },
-      }, 'Preview spec')
-    : null;
-
-  const header = el('div', { class: 'steps-disclosure' }, [toggle, previewBtn].filter(Boolean));
-
-  const children = [header];
-  if (open && steps.length > 0) {
-    children.push(el('ol', { class: 'steps-list' },
-      steps.map((step, i) => buildStepRow(ctx, step, i + 1, canEdit))));
-  } else if (open && steps.length === 0) {
-    children.push(el('div', { class: 'steps-empty' },
-      'No steps yet — press Mark-start in the capture overlay, then interact.'));
+  const headKids = [el('span', { class: 'steps-tab-count' },
+    `${steps.length} ${steps.length === 1 ? 'step' : 'steps'}`)];
+  if (previewAvailable) {
+    headKids.push(el('button', {
+      class: 'steps-preview-btn',
+      title: 'Preview the checkpoint test that reaches this screen in recording.spec.ts',
+      onclick: (e) => { e.stopPropagation(); openPreviewSpec(ctx, view); },
+    }, 'Preview spec'));
   }
-  return el('div', { class: 'steps-block' }, children);
+  const out = [el('div', { class: 'steps-tab-head' }, headKids)];
+
+  if (steps.length === 0) {
+    out.push(el('div', { class: 'steps-empty' },
+      previewAvailable
+        ? 'No steps captured. Press Record in the capture overlay, then interact.'
+        : 'No steps captured.'));
+    return out;
+  }
+  out.push(el('div', { class: 'steps-rail-list' },
+    steps.map((step, i) => buildStepTile(ctx, step, i + 1, i === steps.length - 1, canEdit))));
+  return out;
 }
 
-/** One numbered row. Renders struck-through when omitted, with [edit]/[×]
- *  affordances when the store supports it. */
-function buildStepRow(ctx, step, n, canEdit) {
+/* ─── Timeline tile — rail + stamp / target / meta ─────────────── */
+function buildStepTile(ctx, step, n, isLast, canEdit) {
   const omitted = step.omitted === true;
-  const human = humanFor(step);
+  const { action, target, meta } = tileParts(step);
 
-  const num = el('span', { class: 'step-num' }, `${n}.`);
-  const textNode = el('span', {
-    class: `step-text${omitted ? ' step-omitted' : ''}`,
-    title: step.code || '',
-  }, human);
-  if (canEdit) {
-    textNode.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (omitted) return; // omitted rows are read-only until unomitted
-      startStepEdit(ctx, textNode, step);
-    });
+  const rail = el('div', { class: 'step-rail' },
+    [el('span', { class: 'step-dot' }), isLast ? null : el('span', { class: 'step-line' })].filter(Boolean));
+
+  const stamp = el('div', { class: 'step-stamp' }, [
+    el('span', { class: 'step-stamp-num' }, String(n).padStart(2, '0')),
+    el('span', { class: 'step-stamp-div' }, '·'),
+    el('span', { class: 'step-stamp-action' }, action),
+  ]);
+
+  const targetEl = el('div', { class: `step-target${omitted ? ' step-omitted' : ''}`, title: step.code || '' },
+    target || '—');
+  if (canEdit && !omitted) {
+    targetEl.addEventListener('click', (e) => { e.stopPropagation(); startStepEdit(ctx, targetEl, step, target); });
   }
 
-  const actions = canEdit
-    ? el('span', { class: 'step-actions' }, [
-        el('button', {
-          class: 'step-act-btn',
-          title: 'Edit human label',
-          onclick: (e) => {
-            e.stopPropagation();
-            if (omitted) return;
-            startStepEdit(ctx, textNode, step);
-          },
-        }, 'edit'),
-        el('button', {
-          class: 'step-act-btn step-act-omit',
-          title: omitted ? 'Restore step' : 'Omit from emitted spec',
-          onclick: (e) => { e.stopPropagation(); toggleOmit(ctx, step); },
-        }, omitted ? 'undo' : '×'),
-      ])
-    : null;
+  const bodyKids = [stamp, targetEl];
+  if (meta) bodyKids.push(el('div', { class: 'step-meta' }, meta));
+  const body = el('div', { class: 'step-tile-body' }, bodyKids);
 
-  return el('li', { class: `step-row${omitted ? ' is-omitted' : ''}`, dataset: { id: step.id } },
-    [num, textNode, actions].filter(Boolean));
+  const tileKids = [rail, body];
+  if (canEdit) {
+    tileKids.push(el('div', { class: 'step-tile-actions' }, [
+      el('button', { class: 'step-act-btn', title: 'Edit label',
+        onclick: (e) => { e.stopPropagation(); if (!omitted) startStepEdit(ctx, targetEl, step, target); } }, 'edit'),
+      el('button', { class: 'step-act-btn', title: omitted ? 'Restore step' : 'Omit from emitted spec',
+        onclick: (e) => { e.stopPropagation(); toggleOmit(ctx, step); } }, omitted ? 'undo' : '×'),
+    ]));
+  }
+
+  return el('div', { class: `step-tile${omitted ? ' is-omitted' : ''}`, dataset: { id: step.id } }, tileKids);
 }
 
-/** Inline-edit the human label only. Cmd/Ctrl+Enter or blur commit, Esc cancel. */
-function startStepEdit(ctx, textNode, step) {
-  const current = humanFor(step);
+/** Map a recorder step to the timeline tile's (action verb / target / meta). */
+const VERB = {
+  openPage: 'Go to', navigate: 'Go to', click: 'Click', dblclick: 'Double-click',
+  fill: 'Type', press: 'Press', select: 'Pick', check: 'Check', uncheck: 'Uncheck',
+  closesPage: 'Close', setInputFiles: 'Upload',
+};
+const stripMd = (s) => String(s || '').replace(/\*\*/g, '').replace(/`/g, '');
+function cleanSelector(sel) {
+  if (!sel || sel.startsWith('internal:')) return ''; // hide noisy Playwright internal selectors
+  return sel.length > 64 ? `${sel.slice(0, 61)}…` : sel;
+}
+function tileParts(step) {
+  const verb = VERB[step.kind] || (step.kind ? step.kind[0].toUpperCase() + step.kind.slice(1) : 'Action');
+  // A user-edited label IS the target line.
+  if (step.humanText && step.humanText.trim()) {
+    const meta = cleanSelector(step.selector);
+    return { action: verb, target: stripMd(step.humanText.trim()), meta };
+  }
+  switch (step.kind) {
+    case 'openPage': case 'navigate': return { action: 'Go to', target: step.url || '', meta: '' };
+    case 'press': return { action: 'Press', target: step.key || '', meta: '' };
+    case 'closesPage': return { action: 'Close', target: 'the page', meta: '' };
+    default: {
+      const target = stripMd(selectorLabel(step.selector)) || 'an element';
+      let meta = cleanSelector(step.selector);
+      if (meta === target) meta = '';
+      return { action: verb, target, meta };
+    }
+  }
+}
+
+/** Inline-edit the human label. Cmd/Ctrl+Enter or blur commit, Esc cancel. */
+function startStepEdit(ctx, node, step, initial) {
   const input = el('input', { class: 'step-text-edit', type: 'text' });
-  input.value = current;
+  input.value = initial != null ? initial : (step.humanText || '');
   input.addEventListener('click', (e) => e.stopPropagation());
   let done = false;
   const commit = async () => {
     if (done) return; done = true;
-    const next = input.value;
-    try {
-      await ctx.store.editStepText({ stepId: step.id, humanText: next });
-      ctx.render();
-    } catch (err) {
-      showToast(`Edit failed: ${err?.message || err}`);
-      ctx.render();
-    }
+    try { await ctx.store.editStepText({ stepId: step.id, humanText: input.value }); ctx.render(); }
+    catch (err) { showToast(`Edit failed: ${err?.message || err}`); ctx.render(); }
   };
   input.addEventListener('blur', commit);
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); input.blur(); }
     else if (e.key === 'Escape') { done = true; ctx.render(); }
   });
-  textNode.replaceWith(input);
+  node.replaceWith(input);
   input.focus();
   input.setSelectionRange(input.value.length, input.value.length);
 }
 
-/** Omit or restore. Omit shows a toast with Undo (matches resolve UX);
- *  restore is silent (it's already the user's explicit intent). */
+/** Omit or restore. Omit shows a toast with Undo; restore is silent. */
 async function toggleOmit(ctx, step) {
   const wasOmitted = step.omitted === true;
   try {
-    if (wasOmitted) {
-      await ctx.store.unomitStep({ stepId: step.id });
-      ctx.render();
-    } else {
+    if (wasOmitted) { await ctx.store.unomitStep({ stepId: step.id }); ctx.render(); }
+    else {
       await ctx.store.omitStep({ stepId: step.id });
       ctx.render();
       showToast('Step omitted from spec', {
@@ -161,26 +151,4 @@ async function toggleOmit(ctx, step) {
   } catch (err) {
     showToast(`${wasOmitted ? 'Restore' : 'Omit'} failed: ${err?.message || err}`);
   }
-}
-
-/** Lazily attach a per-view open/closed map onto ctx.state so re-renders don't
- *  lose disclosure state. Default closed: stepping into a screen with N steps
- *  shouldn't immediately push pins below the fold. */
-function ensureStepsOpenMap(ctx) {
-  if (!ctx.state.stepsOpen) ctx.state.stepsOpen = new Map();
-  return ctx.state.stepsOpen;
-}
-
-/** Resolve a step's display text. Override wins; otherwise we ask the same
- *  describeAction the capture popover uses (lib/recorder-format.mjs). */
-function humanFor(step) {
-  if (typeof step.humanText === 'string' && step.humanText.length > 0) return step.humanText;
-  return describeAction({
-    name: step.kind,
-    selector: step.selector,
-    text: step.text,
-    url: step.url,
-    key: step.key,
-    options: step.options,
-  });
 }

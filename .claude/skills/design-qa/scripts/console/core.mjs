@@ -38,7 +38,9 @@ export function createApp({ store, mounts, options = {} }) {
     activePinId: null,
     placeMode: false,
     composer: null, // {viewId, xPct, yPct} while a new pin is being authored
-    filters: { status: 'all', category: 'all', sortBy: 'created' },
+    filters: { status: 'all', category: 'all', sortBy: 'created', q: '' },
+    screenQuery: '', // left-sidebar search term (filters the screens list)
+    rightTab: 'comments', // right pane tab: 'comments' | 'steps'
     author: opts.author,
   };
 
@@ -64,7 +66,8 @@ export function createApp({ store, mounts, options = {} }) {
       const f = state.filters;
       const out = indexed.filter((p) =>
         (f.status === 'all' || p.status === f.status) &&
-        (f.category === 'all' || p.category === f.category));
+        (f.category === 'all' || p.category === f.category) &&
+        (!f.q || (p.note || '').toLowerCase().includes(f.q)));
       if (f.sortBy === 'status') out.sort((a, b) => a.status.localeCompare(b.status));
       else if (f.sortBy === 'category') out.sort((a, b) => (a.category || '').localeCompare(b.category || ''));
       return out;
@@ -125,11 +128,55 @@ export function wireControls(ctx) {
   const sortBy = document.getElementById('sortBy');
   if (sortBy) sortBy.addEventListener('change', (e) => { ctx.state.filters.sortBy = e.target.value; ctx.render(); });
 
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && (ctx.state.placeMode || ctx.state.composer)) {
-      ctx.setState({ placeMode: false, composer: null });
-    }
+  // Comment text search (App Frame right-pane search). Filters visible pins by
+  // note text; lives in core so the exported artifact inherits it too.
+  const commentSearch = document.getElementById('commentSearch');
+  if (commentSearch) commentSearch.addEventListener('input', (e) => {
+    ctx.state.filters.q = e.target.value.trim().toLowerCase(); ctx.render();
   });
 
-  setText('sessionName', ctx.store.session.name || 'Design QA');
+  // Screen search (App Frame left-sidebar search). Filters the screens list.
+  const screenSearch = document.getElementById('screenSearch');
+  if (screenSearch) screenSearch.addEventListener('input', (e) => {
+    ctx.state.screenQuery = e.target.value.trim().toLowerCase(); ctx.render();
+  });
+
+  // Overflow popover (⋯) hosts the status/category/sort controls.
+  const overflowBtn = document.getElementById('overflowBtn');
+  const overflowMenu = document.getElementById('overflowMenu');
+  const closeOverflow = () => {
+    if (!overflowMenu || overflowMenu.hidden) return;
+    overflowMenu.hidden = true; overflowBtn?.setAttribute('aria-expanded', 'false');
+  };
+  if (overflowBtn && overflowMenu) {
+    overflowBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const willOpen = overflowMenu.hidden;
+      overflowMenu.hidden = !willOpen;
+      overflowBtn.setAttribute('aria-expanded', String(willOpen));
+    });
+    document.addEventListener('click', (e) => {
+      if (!overflowMenu.hidden && !overflowMenu.contains(e.target) && e.target !== overflowBtn) closeOverflow();
+    });
+  }
+
+  // Right-pane tabs: Comments | Steps (DesignOS Tabs pattern).
+  document.getElementById('tabComments')?.addEventListener('click', () => ctx.setState({ rightTab: 'comments' }));
+  document.getElementById('tabSteps')?.addEventListener('click', () => ctx.setState({ rightTab: 'steps' }));
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if (overflowMenu && !overflowMenu.hidden) { closeOverflow(); return; }
+    if (ctx.state.placeMode || ctx.state.composer) ctx.setState({ placeMode: false, composer: null });
+  });
+
+  // Identity: session name (left header + collapsed pill) + presence initial.
+  const name = ctx.store.session.name || 'Design QA';
+  setText('sessionName', name);
+  const presence = document.getElementById('presenceAvatar');
+  if (presence) {
+    const author = (ctx.options.author || ctx.store.session.author?.name || '').trim();
+    presence.textContent = (author[0] || '·').toUpperCase();
+    if (presence.parentElement) presence.parentElement.title = author || 'You';
+  }
 }

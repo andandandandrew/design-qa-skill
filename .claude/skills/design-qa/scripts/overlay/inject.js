@@ -64,33 +64,57 @@
   style.textContent = `
     :host, * { box-sizing: border-box; }
     .root {
-      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      font-size: 12px; line-height: 1.4; color: #eeeeee;
-      --bg: #1e1e1e; --bg-2: #2c2c2c; --bg-3: #383838; --bg-4: #444444;
-      --border: #3d3d3d; --border-strong: #555555;
-      --text: #eeeeee; --text-2: #a0a0a0; --text-3: #757575;
-      --accent: #0d99ff; --accent-hover: #1fa9ff; --accent-dim: rgba(13,153,255,0.16);
-      --danger: #f24822;
+      /* DesignOS v2 tokens (dark · cool · default), inlined as static OKLCH.
+         The closed shadow root can't <link>/@import the console stylesheet, so
+         the browser fixture carries a self-contained copy of the token set it
+         uses; the overlay is always dark. Provenance in designos.lock.json. */
+      --surface-0: oklch(0.20 0.002 250); --surface-1: oklch(0.24 0.002 250);
+      --surface-2: oklch(0.28 0.002 250); --surface-3: oklch(0.32 0.002 250);
+      --surface-4: oklch(0.38 0.002 250); --surface-5: oklch(0.46 0.002 250);
+      --surface-overlay: oklch(0.27 0.002 250 / 0.98);
+      --ink-hi: oklch(0.97 0.001 250); --ink: oklch(0.86 0.002 250);
+      --ink-mid: oklch(0.66 0.003 250); --ink-lo: oklch(0.52 0.004 250);
+      --stroke-soft: oklch(1 0 0 / 0.06); --stroke: oklch(1 0 0 / 0.10); --stroke-hi: oklch(1 0 0 / 0.16);
+      --accent-h: 240;
+      --accent: oklch(0.66 0.18 240); --accent-hi: oklch(0.74 0.16 240);
+      --accent-ink: oklch(0.99 0.01 240); --accent-tint: oklch(0.66 0.18 240 / 0.16); --accent-glow: oklch(0.66 0.18 240 / 0.35);
+      --danger: oklch(0.65 0.20 25); --danger-hi: oklch(0.70 0.20 25); --danger-tint: oklch(0.65 0.20 25 / 0.16);
+      --success: oklch(0.72 0.16 152);
+      --shadow-1: 0 1px 2px oklch(0 0 0 / 0.40);
+      --shadow-2: 0 2px 6px oklch(0 0 0 / 0.35), 0 1px 2px oklch(0 0 0 / 0.40);
+      --shadow-3: 0 8px 24px oklch(0 0 0 / 0.45), 0 2px 6px oklch(0 0 0 / 0.40);
+      --shadow-4: 0 20px 50px oklch(0 0 0 / 0.55), 0 6px 14px oklch(0 0 0 / 0.40);
+      --r-1: 2px; --r-2: 4px; --r-control: 5px; --r-3: 6px; --r-4: 8px; --r-float: 10px; --r-5: 12px; --r-pill: 999px;
+      --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+      --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+      /* Legacy alias layer → DesignOS roles, so the existing rules below resolve
+         to tokens without a full selector rewrite. New rules should use roles. */
+      --bg: var(--surface-1); --bg-2: var(--surface-2); --bg-3: var(--surface-3); --bg-4: var(--surface-4);
+      --border: var(--stroke); --border-strong: var(--stroke-hi);
+      --text: var(--ink); --text-2: var(--ink-mid); --text-3: var(--ink-lo);
+      --accent-hover: var(--accent-hi); --accent-dim: var(--accent-tint);
+      font-family: var(--font-sans);
+      font-size: 12px; line-height: 1.4; color: var(--ink);
     }
-    .mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-feature-settings: 'tnum'; }
+    .mono { font-family: var(--font-mono); font-feature-settings: 'tnum'; }
 
     /* Pin layer */
     .pin-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
     .pin {
       position: absolute; width: 24px; height: 24px;
-      background: var(--accent); color: #ffffff;
-      border-radius: 100% 100% 100% 0;            /* tail at bottom-left */
-      font-family: 'Inter', -apple-system, sans-serif;
+      background: var(--accent); color: var(--accent-ink);
+      border-radius: 50% 50% 50% 2px;            /* tail at bottom-left */
+      font-family: var(--font-sans);
       font-size: 10px; font-weight: 700;
       display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 0 0 1.5px #ffffff;
+      box-shadow: var(--shadow-2), 0 0 0 1.5px var(--accent-ink);
       pointer-events: auto; cursor: pointer; user-select: none;
       transition: transform 0.1s, box-shadow 0.1s;
       touch-action: none;                          /* enable pointer drag */
     }
     .pin > span { transform: translate(1px, -1px); }   /* nudge number into the bubble center */
     .pin:hover { background: var(--accent-hover); transform: translate(0, -1px); }
-    .pin.active { background: var(--accent-hover); box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #ffffff, 0 0 0 4px rgba(13,153,255,0.35); }
+    .pin.active { background: var(--accent-hover); box-shadow: var(--shadow-2), 0 0 0 1.5px var(--accent-ink), 0 0 0 4px var(--accent-glow); }
     .pin.dragging { transition: none; cursor: grabbing; }
 
     /* Chrome — hidden during screenshots (opacity preserves focus) */
@@ -107,8 +131,8 @@
     /* Toolbar (collapsed state — minimal Figma-style) */
     .panel {
       position: fixed; top: 12px; right: 12px;
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-4);
+      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
       pointer-events: auto; overflow: hidden;
       max-height: calc(100vh - 24px); display: flex; flex-direction: column;
       min-width: 0;
@@ -138,35 +162,35 @@
     .tool-btn.done-cta {
       margin-left: auto;
       background: var(--accent);
-      color: #ffffff;
+      color: var(--accent-ink);
       font-weight: 600;
     }
-    .tool-btn.done-cta:hover { background: var(--accent-hover); color: #ffffff; }
+    .tool-btn.done-cta:hover { background: var(--accent-hover); color: var(--accent-ink); }
     .tool-btn.done-cta.active,
-    .tool-btn.done-cta.active:hover { background: var(--accent-hover); color: #ffffff; }
+    .tool-btn.done-cta.active:hover { background: var(--accent-hover); color: var(--accent-ink); }
     /* Always-visible labeled verbs (Comment / New / Record / Done). */
     .tool-btn {
       all: unset; cursor: pointer;
       display: inline-flex; align-items: center; gap: 5px;
-      padding: 5px 9px; border-radius: 4px;
+      padding: 5px 9px; border-radius: var(--r-2);
       color: var(--text-2); font-size: 11px; font-weight: 500;
       transition: background 0.08s, color 0.08s;
     }
     .tool-btn:hover { background: var(--bg-3); color: var(--text); }
-    .tool-btn.active { background: var(--accent); color: #ffffff; }
+    .tool-btn.active { background: var(--accent); color: var(--accent-ink); }
     .tool-btn.active:hover { background: var(--accent-hover); }
     .tool-btn .tb-ic { display: inline-flex; }
     .tool-btn svg { width: 13px; height: 13px; display: block; }
     .icon-btn {
       all: unset; cursor: pointer;
       display: inline-flex; align-items: center; justify-content: center;
-      width: 28px; height: 28px; border-radius: 4px;
+      width: 28px; height: 28px; border-radius: var(--r-2);
       color: var(--text-2); transition: background 0.08s, color 0.08s;
     }
     /* Toggle sits at the far right of the verb bar. */
     .panel-header .icon-btn { margin-left: auto; }
     .icon-btn:hover { background: var(--bg-3); color: var(--text); }
-    .icon-btn.active { background: var(--accent); color: #ffffff; }
+    .icon-btn.active { background: var(--accent); color: var(--accent-ink); }
     .icon-btn.active:hover { background: var(--accent-hover); }
     .icon-btn svg { width: 14px; height: 14px; display: block; }
 
@@ -178,11 +202,11 @@
     .confirm-actions { display: flex; gap: 6px; justify-content: flex-end; }
     .confirm-cancel, .confirm-ok {
       all: unset; cursor: pointer; font-size: 11px; font-weight: 500;
-      padding: 4px 11px; border-radius: 4px;
+      padding: 4px 11px; border-radius: var(--r-2);
     }
     .confirm-cancel { color: var(--text-2); }
     .confirm-cancel:hover { background: var(--bg-3); color: var(--text); }
-    .confirm-ok { background: var(--accent); color: #ffffff; }
+    .confirm-ok { background: var(--accent); color: var(--accent-ink); }
     .confirm-ok:hover { background: var(--accent-hover); }
 
     .panel-body { overflow-y: auto; }
@@ -194,8 +218,8 @@
       padding: 4px 12px 6px;
     }
     .section-title {
-      font-size: 11px; font-weight: 600; color: var(--text-2);
-      letter-spacing: 0.02em;
+      font-size: 10px; font-weight: 600; color: var(--ink-lo);
+      letter-spacing: 0.08em; text-transform: uppercase;
     }
 
     .empty { padding: 8px 12px; color: var(--text-3); font-size: 11px; }
@@ -218,10 +242,10 @@
       flex-shrink: 0;
       font-size: 10px; font-weight: 600; color: var(--text-2);
       background: var(--bg-3); border: 1px solid var(--border);
-      padding: 1px 6px; border-radius: 999px;
-      font-family: 'JetBrains Mono', monospace;
+      padding: 1px 6px; border-radius: var(--r-pill);
+      font-family: var(--font-mono);
     }
-    .view-item.active .view-pins { background: var(--accent); color: #ffffff; border-color: transparent; }
+    .view-item.active .view-pins { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
     .view-url {
       font-size: 10px; color: var(--text-3); margin-top: 2px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
@@ -233,17 +257,17 @@
     .view-item:hover .view-actions, .view-item:focus-within .view-actions { opacity: 1; }
     .view-actions button {
       all: unset; cursor: pointer; font-size: 10px;
-      padding: 2px 6px; border-radius: 3px;
+      padding: 2px 6px; border-radius: var(--r-1);
       color: var(--text-2);
     }
     .view-actions button:hover { color: var(--text); background: var(--bg-4); }
     .view-actions button.danger { color: var(--text-2); }
-    .view-actions button.danger:hover { color: var(--danger); background: rgba(242,72,34,0.1); }
+    .view-actions button.danger:hover { color: var(--danger); background: var(--danger-tint); }
 
     .view-rename-input {
       all: unset; flex: 1; min-width: 0;
       font-size: 12px; color: var(--text); font-weight: 500;
-      background: var(--bg); border: 1px solid var(--accent); border-radius: 3px;
+      background: var(--bg); border: 1px solid var(--accent); border-radius: var(--r-1);
       padding: 2px 6px;
     }
 
@@ -256,9 +280,9 @@
     .pin-list .pin-row.active { background: var(--accent-dim); }
     .pin-num {
       width: 16px; height: 16px; flex-shrink: 0;
-      background: var(--accent); color: #ffffff;
-      border-radius: 100% 100% 100% 0;
-      font-family: 'JetBrains Mono', monospace;
+      background: var(--accent); color: var(--accent-ink);
+      border-radius: 50% 50% 50% 2px;
+      font-family: var(--font-mono);
       font-size: 9px; font-weight: 700;
       display: flex; align-items: center; justify-content: center;
       margin-top: 1px;
@@ -273,9 +297,9 @@
     .popover-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
     .popover {
       position: absolute; width: 340px;
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-5);
       pointer-events: auto; overflow: hidden;
-      box-shadow: 0 12px 32px rgba(0,0,0,0.55);
+      box-shadow: var(--shadow-4);
       transform: translate(-50%, 24px);
     }
     .popover textarea {
@@ -293,20 +317,20 @@
     .popover .actions-left { display: flex; gap: 2px; }
     .popover button.text-btn {
       all: unset; cursor: pointer; font-size: 12px;
-      color: var(--text-2); padding: 6px 10px; border-radius: 4px;
+      color: var(--text-2); padding: 6px 10px; border-radius: var(--r-2);
     }
     .popover button.text-btn:hover { color: var(--text); background: var(--bg-3); }
     .popover button.text-btn.danger { color: var(--text-2); }
-    .popover button.text-btn.danger:hover { color: var(--danger); background: rgba(242,72,34,0.1); }
+    .popover button.text-btn.danger:hover { color: var(--danger); background: var(--danger-tint); }
     button.send-btn {
       all: unset; cursor: pointer;
-      width: 28px; height: 28px; border-radius: 50%;
+      width: 28px; height: 28px; border-radius: var(--r-pill);
       display: inline-flex; align-items: center; justify-content: center;
       background: var(--bg-3); color: var(--text-3);
       transition: background 0.1s, color 0.1s;
     }
     button.send-btn:hover:not([aria-disabled="true"]) { background: var(--accent-hover); }
-    button.send-btn.active { background: var(--accent); color: #ffffff; }
+    button.send-btn.active { background: var(--accent); color: var(--accent-ink); }
     button.send-btn.active:hover { background: var(--accent-hover); }
     button.send-btn[aria-disabled="true"] { cursor: not-allowed; }
     button.send-btn svg { width: 14px; height: 14px; display: block; }
@@ -315,10 +339,10 @@
     .composer-pill {
       position: absolute; width: 320px;
       display: flex; align-items: center; gap: 6px;
-      background: var(--bg-3); border: 1px solid var(--border); border-radius: 999px;
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: var(--r-pill);
       padding: 4px 4px 4px 16px;
       pointer-events: auto;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      box-shadow: var(--shadow-3);
       transform: translate(16px, -50%);
     }
     .composer-pill .pill-input {
@@ -331,13 +355,13 @@
     /* Modal */
     .modal-layer { position: fixed; inset: 0; pointer-events: none; }
     .modal-backdrop {
-      position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+      position: fixed; inset: 0; background: oklch(0 0 0 / 0.5);
       pointer-events: auto; display: flex; align-items: center; justify-content: center;
       padding: 24px;
     }
     .modal {
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-4);
+      box-shadow: var(--shadow-4);
       min-width: 320px; max-width: 440px;
       padding: 20px;
     }
@@ -346,25 +370,25 @@
     .modal-actions { display: flex; justify-content: flex-end; gap: 6px; }
     .modal button {
       all: unset; cursor: pointer; padding: 6px 14px;
-      border-radius: 4px; font-size: 12px; font-weight: 500;
+      border-radius: var(--r-2); font-size: 12px; font-weight: 500;
     }
     .modal button.ghost { color: var(--text-2); }
     .modal button.ghost:hover { color: var(--text); background: var(--bg-3); }
-    .modal button.danger { background: var(--danger); color: #ffffff; font-weight: 600; }
-    .modal button.danger:hover { background: #d63d1e; }
-    .modal button.primary { background: var(--accent); color: #ffffff; font-weight: 600; }
+    .modal button.danger { background: var(--danger); color: var(--accent-ink); font-weight: 600; }
+    .modal button.danger:hover { background: var(--danger-hi); }
+    .modal button.primary { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
     .modal button.primary:hover { background: var(--accent-hover); }
 
     /* Spike 8 — Recording chip + popover */
     .tool-btn.recorder-chip.active {
-      background: rgba(242, 72, 34, 0.16);
-      color: #ff4f33;
+      background: var(--danger-tint);
+      color: var(--danger);
     }
     .tool-btn.recorder-chip.active:hover {
-      background: rgba(242, 72, 34, 0.25);
+      background: oklch(0.65 0.20 25 / 0.26);
     }
     .tool-btn.recorder-chip .rec-dot {
-      width: 8px; height: 8px; border-radius: 999px; background: #ff4f33;
+      width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--danger);
       flex-shrink: 0; display: inline-block;
       animation: rec-pulse 1.4s ease-in-out infinite;
     }
@@ -374,8 +398,8 @@
     }
     .rec-popover {
       position: fixed; right: 12px; width: 320px;
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-4);
+      box-shadow: var(--shadow-3);
       pointer-events: auto; overflow: hidden;
       font-size: 12px;
     }
@@ -386,7 +410,7 @@
     .rec-popover-title { font-weight: 600; color: var(--text); font-size: 12px; }
     .rec-popover-close {
       all: unset; cursor: pointer; color: var(--text-2);
-      width: 22px; height: 22px; border-radius: 4px;
+      width: 22px; height: 22px; border-radius: var(--r-2);
       display: inline-flex; align-items: center; justify-content: center;
     }
     .rec-popover-close:hover { background: var(--bg-3); color: var(--text); }
@@ -398,9 +422,9 @@
     .rec-popover-meta b { color: var(--text); font-weight: 600; }
     .rec-redact-chip {
       display: inline-block; margin-left: 6px;
-      padding: 1px 6px; border-radius: 999px; font-size: 10px;
-      background: rgba(13, 153, 255, 0.16); color: var(--accent);
-      font-family: 'JetBrains Mono', monospace; font-weight: 600;
+      padding: 1px 6px; border-radius: var(--r-pill); font-size: 10px;
+      background: var(--accent-tint); color: var(--accent);
+      font-family: var(--font-mono); font-weight: 600;
     }
     .rec-popover-list {
       max-height: 240px; overflow-y: auto;
@@ -413,17 +437,17 @@
       padding: 5px 12px; color: var(--text); font-size: 11px;
       display: flex; gap: 8px; line-height: 1.45;
     }
-    .rec-step + .rec-step { border-top: 1px solid rgba(255,255,255,0.04); }
+    .rec-step + .rec-step { border-top: 1px solid var(--stroke-soft); }
     .rec-step:hover { background: var(--bg-3); }
     .rec-step .rec-step-n {
       flex-shrink: 0; color: var(--text-3);
-      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+      font-family: var(--font-mono);
       font-size: 10px; width: 22px; text-align: right;
     }
     .rec-step .rec-step-text { flex: 1; word-break: break-word; }
     .rec-step .rec-step-text code {
-      background: var(--bg-3); padding: 0 4px; border-radius: 3px;
-      font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-size: 10px;
+      background: var(--bg-3); padding: 0 4px; border-radius: var(--r-1);
+      font-family: var(--font-mono); font-size: 10px;
     }
     .rec-step .rec-step-text strong { color: var(--text); font-weight: 600; }
     .rec-popover-actions {
@@ -433,12 +457,12 @@
     }
     .rec-popover-actions button {
       all: unset; cursor: pointer; font-size: 11px; font-weight: 500;
-      padding: 5px 10px; border-radius: 4px;
+      padding: 5px 10px; border-radius: var(--r-2);
     }
     .rec-popover-actions button.ghost { color: var(--text-2); }
     .rec-popover-actions button.ghost:hover { color: var(--text); background: var(--bg-3); }
     .rec-popover-actions button.danger { color: var(--danger); }
-    .rec-popover-actions button.danger:hover { background: rgba(242,72,34,0.1); }
+    .rec-popover-actions button.danger:hover { background: var(--danger-tint); }
 
     /* Toast */
     .toast-layer {
@@ -447,9 +471,9 @@
       pointer-events: none; align-items: center;
     }
     .toast {
-      background: var(--bg-2); border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: var(--r-3);
       padding: 6px 14px; font-size: 11px; color: var(--text);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+      box-shadow: var(--shadow-3);
       transition: opacity 0.2s, transform 0.2s;
       pointer-events: auto;
     }

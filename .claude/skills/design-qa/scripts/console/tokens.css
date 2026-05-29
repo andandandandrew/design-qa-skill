@@ -1,0 +1,246 @@
+/* ⚠ GENERATED — copied into /context from styles/tokens.css. Do not hand-edit; edit the source and regenerate (see context/DESIGN-CONTEXT.md §6). */
+/* DesignOS v2 — design tokens
+ * Dark and light themes are token pairs; swap via [data-theme="dark|light"] on <html>.
+ * All chromatic values in OKLCH so the tweak panel can swing hue / temp / chroma
+ * globally without retouching individual swatches.
+ */
+
+/* ── Dark theme (default) ──────────────────────────────────────────── */
+:root,
+[data-theme="dark"] {
+  /* Surface ramp — neutral dark greys, tuned to a Figma-tight editor.
+     Chroma kept tiny so it reads pure grey; temp can be swung by
+     [data-surface] below. */
+  --surface-0:  oklch(0.20 0.002 250);   /* canvas — slightly darker than chrome */
+  --surface-1:  oklch(0.24 0.002 250);   /* sidebar / right-pane bg (~#1e1e1e) */
+  --surface-2:  oklch(0.28 0.002 250);   /* input / search field / resting row */
+  --surface-3:  oklch(0.32 0.002 250);   /* hover */
+  --surface-4:  oklch(0.38 0.002 250);   /* selected / pressed surface (neutral) */
+  --surface-5:  oklch(0.46 0.002 250);   /* divider on raised bg, pressed button */
+  --surface-overlay: oklch(0.27 0.002 250 / 0.98); /* menu, popover */
+
+  /* Ink (text) */
+  --ink-hi:   oklch(0.97 0.001 250);
+  --ink:      oklch(0.86 0.002 250);
+  --ink-mid:  oklch(0.66 0.003 250);
+  --ink-lo:   oklch(0.52 0.004 250);
+  --ink-dim:  oklch(0.40 0.005 250);
+
+  /* Strokes */
+  --stroke-soft: oklch(1 0 0 / 0.06);
+  --stroke:      oklch(1 0 0 / 0.10);
+  --stroke-hi:   oklch(1 0 0 / 0.16);
+  --stroke-inset: oklch(0 0 0 / 0.35);
+
+  /* Recess wells — "recess, don't outline". Dark = black wash. */
+  --recess:        oklch(0 0 0 / 0.28);   /* picker · segmented control · in-toolbar button well */
+  --recess-strong: oklch(0 0 0 / 0.38);   /* pressed / deeper well */
+
+  /* Highlight tint — drives selected-row backgrounds. Defaults to the
+     same hue as the accent so brand-consistent looks need only one tweak,
+     but can be steered independently from the Tweaks panel. */
+  --highlight-h: var(--accent-h);
+
+  /* Selection tints — three intentional patterns, in order of loudness:
+     - row-selected:        layer/page rows in side nav — NEUTRAL lighter surface
+     - row-selected-accent: comments / "interesting" rows — quiet accent tint
+                            (subtle; pulled back so it sits between neutral and active)
+     - row-active:          active tool / live pressed state — bright accent */
+  --row-hover:           oklch(1 0 0 / 0.04);
+  --row-selected:        oklch(0.34 0.002 250);
+  --row-selected-accent: oklch(0.55 0.12 var(--highlight-h) / 0.20);
+  --row-active:          oklch(0.66 0.18 var(--highlight-h) / 0.36);
+
+  /* Shadows */
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.40);
+  --shadow-2: 0 2px 6px oklch(0 0 0 / 0.35), 0 1px 2px oklch(0 0 0 / 0.40);
+  --shadow-3: 0 8px 24px oklch(0 0 0 / 0.45), 0 2px 6px oklch(0 0 0 / 0.40);
+  --shadow-4: 0 20px 50px oklch(0 0 0 / 0.55), 0 6px 14px oklch(0 0 0 / 0.40);
+  --shadow-floor: 0 1px 0 oklch(1 0 0 / 0.04) inset;
+}
+
+/* ── Light theme ───────────────────────────────────────────────────── */
+[data-theme="light"] {
+  /* Surface ramp (off-white, cool) */
+  --surface-0:  oklch(0.985 0.002 250);  /* canvas */
+  --surface-1:  oklch(1     0     250);  /* panels */
+  --surface-2:  oklch(0.96  0.003 250);  /* raised */
+  --surface-3:  oklch(0.93  0.004 250);  /* raised hover */
+  --surface-4:  oklch(0.89  0.004 250);  /* selected button */
+  --surface-5:  oklch(0.82  0.005 250);  /* pressed */
+  --surface-overlay: oklch(1 0 0 / 0.98);
+
+  /* Ink */
+  --ink-hi:   oklch(0.18 0.008 250);
+  --ink:      oklch(0.30 0.007 250);
+  --ink-mid:  oklch(0.46 0.006 250);
+  --ink-lo:   oklch(0.62 0.005 250);
+  --ink-dim:  oklch(0.78 0.004 250);
+
+  /* Strokes */
+  --stroke-soft: oklch(0 0 0 / 0.05);
+  --stroke:      oklch(0 0 0 / 0.08);
+  --stroke-hi:   oklch(0 0 0 / 0.14);
+  --stroke-inset: oklch(1 0 0 / 0.6);
+
+  /* Recess wells — light = a soft dark inset (a darker wash would read as a hole). */
+  --recess:        oklch(0 0 0 / 0.06);
+  --recess-strong: oklch(0 0 0 / 0.10);
+
+  /* Selection row tint */
+  --row-hover:           oklch(0 0 0 / 0.03);
+  --row-selected:        oklch(0.66 0.18 var(--highlight-h) / 0.14);
+  --row-selected-accent: oklch(0.66 0.18 var(--highlight-h) / 0.22);
+  --row-active:          oklch(0.66 0.18 var(--highlight-h) / 0.32);
+
+  /* Shadows */
+  --shadow-1: 0 1px 2px oklch(0 0 0 / 0.06);
+  --shadow-2: 0 2px 6px oklch(0 0 0 / 0.08), 0 1px 2px oklch(0 0 0 / 0.06);
+  --shadow-3: 0 8px 24px oklch(0 0 0 / 0.10), 0 2px 6px oklch(0 0 0 / 0.06);
+  --shadow-4: 0 20px 50px oklch(0 0 0 / 0.14), 0 6px 14px oklch(0 0 0 / 0.08);
+  --shadow-floor: 0 1px 0 oklch(1 0 0 / 0.7) inset;
+}
+
+/* ── Theme-agnostic tokens ─────────────────────────────────────────── */
+:root {
+  /* Accents — hue is tweakable. Default is the genre-standard Figma-share
+     blue (240). Curated swatch set lives in the Tweaks panel. */
+  --accent-h: 240;
+  --accent:        oklch(0.66 0.18 var(--accent-h));
+  --accent-hi:     oklch(0.74 0.16 var(--accent-h));
+  --accent-lo:     oklch(0.55 0.18 var(--accent-h));
+  --accent-tint:   oklch(0.66 0.18 var(--accent-h) / 0.16);
+  --accent-glow:   oklch(0.66 0.18 var(--accent-h) / 0.35);
+  --accent-ink:    oklch(0.99 0.01 var(--accent-h));
+
+  /* Semantic */
+  --danger:        oklch(0.65 0.20 25);
+  --danger-tint:   oklch(0.65 0.20 25 / 0.16);
+  --danger-ink:    oklch(0.99 0.01 25);
+  --success:       oklch(0.72 0.16 152);
+  --success-tint:  oklch(0.72 0.16 152 / 0.16);
+  --warning:       oklch(0.82 0.14 80);
+  --warning-tint:  oklch(0.82 0.14 80 / 0.16);
+
+  /* ── Radii ───────────────────────────────────────────────────────
+     Tweakable as a scale via --r-scale. The ladder is the primitive set;
+     --r-control and --r-float are the two in-between steps the chrome
+     actually needs (formerly the un-owned raw 5 / 10). Every component
+     radius must resolve to one of these — no raw pixel radii. */
+  --r-scale: 1;
+  --r-1: calc(2px  * var(--r-scale));   /* tag · kbd · chip */
+  --r-2: calc(4px  * var(--r-scale));   /* row · input · default button */
+  --r-control: calc(5px * var(--r-scale)); /* search · dropdown · share · toolbar btn · tooltip */
+  --r-3: calc(6px  * var(--r-scale));   /* tool · segment · field well */
+  --r-4: calc(8px  * var(--r-scale));   /* card · panel section · tile */
+  --r-float: calc(10px * var(--r-scale)); /* floating pill · toast · mini-toolbar */
+  --r-5: calc(12px * var(--r-scale));   /* sheet · modal · large floating card */
+  --r-pill: 999px;
+
+  /* Spacing (compact baseline; density overrides below) */
+  --s-1: 2px; --s-2: 4px; --s-3: 6px; --s-4: 8px; --s-5: 10px;
+  --s-6: 12px; --s-7: 16px; --s-8: 20px; --s-9: 24px; --s-10: 32px;
+  --s-11: 40px; --s-12: 56px;
+
+  /* Sizing (control heights) — Figma-tight defaults. Density swings these. */
+  --ctl-xs: 18px;   /* tag · kbd · segment item */
+  --ctl-sm: 22px;   /* row action icon-button */
+  --ctl-md: 24px;   /* sidebar / layer row · input · field · default button */
+  --ctl-lg: 28px;   /* section header · prominent / floating-pill button */
+  --ctl-xl: 32px;   /* top-bar tool · app-switcher · top-bar icon-button */
+
+  /* Chrome dimensions
+     --topbar-h : full-width docked top bar (its own shell)
+     --cluster-h: floating-pill + action-cluster row height (bottom toolbar,
+                  sidebar brand row, right action row, floating left/right pills) */
+  --topbar-h: 44px;
+  --cluster-h: 40px;
+  --sidebar-w: 240px;
+  --inspector-w: 248px;
+
+  /* ── Semantic surface treatments ─────────────────────────────────
+     Component-level color decisions that recur across the system.
+     --recess drives the "recess, don't outline" well (Principle 14);
+     theme-specific values live in each theme block below. */
+  --component:     oklch(0.74 0.20 295);   /* component / instance accent */
+  --component-hi:  oklch(0.86 0.20 295);   /* selected instance */
+  --component-tint: oklch(0.74 0.20 295 / 0.16);
+
+  /* Gradients — brand / identity surfaces (theme-agnostic). */
+  --grad-tool:     linear-gradient(135deg, oklch(0.82 0.13 70), oklch(0.58 0.16 35)); /* app/tool switcher tile */
+  --grad-tool-ink: oklch(0.99 0.01 70);
+  --grad-avatar:   linear-gradient(135deg, oklch(0.78 0.12 60), oklch(0.55 0.14 30)); /* user avatar */
+
+  /* Typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --fs-10: 10px; --fs-11: 11px; --fs-12: 12px; --fs-13: 13px;
+  --fs-14: 14px; --fs-15: 15px; --fs-16: 16px; --fs-18: 18px;
+  --fs-20: 20px; --fs-24: 24px; --fs-32: 32px; --fs-48: 48px;
+
+  /* Icon stroke (tweakable) */
+  --icon-stroke: 1.5;
+}
+
+/* ── Density variants ──────────────────────────────────────────────── */
+[data-density="comfortable"] {
+  --ctl-xs: 20px; --ctl-sm: 24px; --ctl-md: 28px; --ctl-lg: 32px; --ctl-xl: 36px;
+  --s-3: 7px; --s-4: 9px; --s-5: 11px; --s-6: 14px; --s-7: 18px;
+}
+[data-density="spacious"] {
+  --ctl-xs: 22px; --ctl-sm: 26px; --ctl-md: 32px; --ctl-lg: 36px; --ctl-xl: 40px;
+  --s-3: 8px; --s-4: 10px; --s-5: 12px; --s-6: 16px; --s-7: 20px;
+}
+
+/* ── Surface temperature ───────────────────────────────────────────── */
+/* Dark + temp */
+[data-theme="dark"][data-surface="warm"] {
+  --surface-0: oklch(0.16 0.008 55);  --surface-1: oklch(0.19 0.008 55);
+  --surface-2: oklch(0.22 0.008 55);  --surface-3: oklch(0.26 0.009 55);
+  --surface-4: oklch(0.30 0.010 55);  --surface-5: oklch(0.36 0.010 55);
+  --surface-overlay: oklch(0.22 0.010 55 / 0.94);
+}
+[data-theme="dark"][data-surface="neutral"] {
+  --surface-0: oklch(0.16 0.001 250); --surface-1: oklch(0.19 0.001 250);
+  --surface-2: oklch(0.22 0.001 250); --surface-3: oklch(0.26 0.001 250);
+  --surface-4: oklch(0.30 0.001 250); --surface-5: oklch(0.36 0.001 250);
+  --surface-overlay: oklch(0.22 0.001 250 / 0.94);
+}
+[data-theme="dark"][data-surface="oled"] {
+  --surface-0: #000;                  --surface-1: oklch(0.12 0.005 250);
+  --surface-2: oklch(0.16 0.005 250); --surface-3: oklch(0.21 0.006 250);
+  --surface-4: oklch(0.27 0.006 250); --surface-5: oklch(0.33 0.007 250);
+  --surface-overlay: oklch(0.15 0.006 250 / 0.96);
+}
+/* Light + temp */
+[data-theme="light"][data-surface="warm"] {
+  --surface-0: oklch(0.985 0.004 70); --surface-1: oklch(1 0 0);
+  --surface-2: oklch(0.96 0.005 70);  --surface-3: oklch(0.93 0.006 70);
+  --surface-4: oklch(0.89 0.007 70);  --surface-5: oklch(0.82 0.008 70);
+}
+[data-theme="light"][data-surface="neutral"] {
+  --surface-0: oklch(0.985 0 0);      --surface-1: oklch(1 0 0);
+  --surface-2: oklch(0.96 0 0);       --surface-3: oklch(0.93 0 0);
+  --surface-4: oklch(0.89 0 0);       --surface-5: oklch(0.82 0 0);
+}
+[data-theme="light"][data-surface="oled"] {
+  /* "OLED" in light = max-contrast paper */
+  --surface-0: oklch(1 0 0);          --surface-1: oklch(1 0 0);
+  --surface-2: oklch(0.97 0.002 250); --surface-3: oklch(0.93 0.003 250);
+  --surface-4: oklch(0.88 0.004 250); --surface-5: oklch(0.80 0.005 250);
+}
+
+/* ── Shadow intensity ──────────────────────────────────────────────── */
+[data-shadows="flat"] {
+  --shadow-1: 0 0 0 1px var(--stroke);
+  --shadow-2: 0 1px 2px oklch(0 0 0 / 0.18);
+  --shadow-3: 0 4px 10px oklch(0 0 0 / 0.20);
+  --shadow-4: 0 10px 22px oklch(0 0 0 / 0.30);
+}
+[data-shadows="dramatic"] {
+  --shadow-1: 0 2px 4px oklch(0 0 0 / 0.55);
+  --shadow-2: 0 4px 10px oklch(0 0 0 / 0.5), 0 2px 4px oklch(0 0 0 / 0.5);
+  --shadow-3: 0 14px 40px oklch(0 0 0 / 0.6), 0 4px 10px oklch(0 0 0 / 0.5);
+  --shadow-4: 0 30px 80px oklch(0 0 0 / 0.7), 0 10px 24px oklch(0 0 0 / 0.55);
+}

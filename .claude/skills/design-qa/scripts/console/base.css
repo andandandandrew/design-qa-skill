@@ -1,0 +1,88 @@
+/* Vendored from DesignOS v2 context/base.css (tokensRev f7973d, pulled 2026-05-28).
+ * Provenance + adopted ids recorded in designos.lock.json. Two deliberate
+ * deviations from source, for design-qa's buildless console + portable file://
+ * artifact (which inlines this stylesheet — see artifact/build.mjs):
+ *   1. The Inter/JetBrains-Mono @import is moved to the HTML <head> as a <link>
+ *      (an @import is only honored when it leads a stylesheet; the artifact
+ *      concatenates tokens+base+styles into one <style>, so a non-leading
+ *      @import would be dropped).
+ *   2. The three relative-color values — oklch(from var(--ink) l c h / A) — are
+ *      pre-resolved to the static dark-theme --ink (oklch(0.86 0.002 250)) so
+ *      the file:// artifact needs no relative-color support. */
+/* DesignOS v2 — base reset + chrome primitives */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  line-height: 1.4;
+  color: var(--ink);
+  background: #15151a;       /* design-canvas void; not theme-bound */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: "cv11", "ss01", "ss03";
+}
+
+button { font-family: inherit; cursor: pointer; border: 0; background: none; color: inherit; padding: 0; }
+input, select, textarea { font-family: inherit; }
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--r-2);
+}
+
+/* Scrollbars — thin, theme-aware */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: oklch(0.86 0.002 250 / 0.18);   /* was oklch(from var(--ink) l c h / 0.18) */
+  border-radius: var(--r-pill);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: oklch(0.86 0.002 250 / 0.3);    /* was oklch(from var(--ink) l c h / 0.3) */
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+/* Every artboard's root */
+.os-root {
+  width: 100%; height: 100%;
+  background: var(--surface-0);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-11);
+  position: relative;
+  overflow: hidden;
+}
+
+/* Helpers */
+.mono { font-family: var(--font-mono); font-feature-settings: "zero", "ss01"; }
+.eyebrow {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-lo);
+}
+.kbd {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 5px;
+  border-radius: var(--r-1);
+  background: oklch(0.86 0.002 250 / 0.08);   /* was oklch(from var(--ink) l c h / 0.08) */
+  border: 1px solid var(--stroke-soft);
+  color: var(--ink-mid);
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  height: 16px;
+}
+
+/* Brand mark retired — the generic D-tile was removed from the system per
+   CLAUDE.md / product direction. The .os-mark class is intentionally gone;
+   nothing in the index, hubs, or layouts renders it anymore. */

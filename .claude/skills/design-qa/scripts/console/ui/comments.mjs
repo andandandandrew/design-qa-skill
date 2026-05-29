@@ -1,121 +1,139 @@
 import { el } from '../lib/dom.mjs';
 import { showToast } from './toast.mjs';
-import { renderStepsDisclosure } from './steps.mjs';
+import { icon } from './icons.mjs';
+import { openMenu } from './menu.mjs';
+import { renderStepsTab } from './steps.mjs';
 
 /**
- * Comments panel — the pins of the active screen as Figma-style cards.
+ * Right pane — two tabs (Comments | Steps). The Comments tab renders the active
+ * screen's pins as DesignOS comment cards; the Steps tab renders the recorded
+ * Playwright steps. Tab state lives on ctx.state.rightTab.
  *
- * Layout (matches Figma's comment card; ref `_qa/figma-comment-ui/`):
- *
- *   ┌───────────────────────────────────────────────┐
- *   │ ⓐ                              [cat ▾]  [ ✓ ] │  ← header row
- *   │ #4 · Create Account                           │  ← breadcrumb
- *   │ Andrew Frank · 17h ago                        │  ← byline
- *   │ the character code for the macron "o"         │  ← note body
- *   └───────────────────────────────────────────────┘
- *
- * The avatar is an initial in a deterministic color circle. The "ellipsis"
- * slot from Figma is the **category dropdown** here (per design feedback —
- * a category is the most useful overflow). The circle on the far right is
- * "Mark as resolved": click toggles resolve and shows a bottom toast with
- * Undo — no completion-note prompt (dropped per feedback 2026-05-28).
- *
- * Note editing happens in place (no full re-render mid-typing, so focus is
- * never stolen); commit on blur or Cmd/Ctrl+Enter, cancel on Escape.
+ * Comment card matches DesignOS `comments-panel.jsx` `CommentCard`: a 24px
+ * avatar on the LEFT, a body column on the right (breadcrumb `#n · screen`,
+ * author + relative time, note body, optional category foot-tag), and
+ * hover/selected reveals top-right actions — a `⋯` overflow menu (category +
+ * delete) and the circular resolve check. No persistent borders (flat list).
  */
 export function renderComments(ctx, root) {
   const view = ctx.activeView();
-  const pageEl = document.getElementById('commentsPage');
+  const tab = ctx.state.rightTab || 'comments';
 
-  if (!view) { pageEl.textContent = '—'; root.replaceChildren(); return; }
-  pageEl.textContent = view.name;
+  // Tab active states + comment-only search-row visibility.
+  document.getElementById('tabComments')?.classList.toggle('active', tab === 'comments');
+  document.getElementById('tabSteps')?.classList.toggle('active', tab === 'steps');
+  const searchRow = document.getElementById('commentsSearchRow');
+  if (searchRow) searchRow.hidden = tab !== 'comments';
 
-  // Spike 8 / 9d — recorded-steps disclosure sits above the comment cards. The
-  // node returns null if there are no steps AND no preview surface, so the
-  // pre-Spike-8 layout is unchanged on legacy / fixture sessions.
-  const stepsNode = renderStepsDisclosure(ctx);
+  const scopeEl = document.getElementById('commentsPage');
+  if (scopeEl) scopeEl.textContent = view ? (view.name || '(unnamed screen)') : '—';
+
+  if (!view) { root.replaceChildren(); return; }
+
+  if (tab === 'steps') { root.replaceChildren(...renderStepsTab(ctx, view)); return; }
 
   const pins = ctx.visiblePins(view);
   if (pins.length === 0) {
     const total = view.pins.length;
-    const empty = el('div', { class: 'empty-note' },
-      total === 0 ? 'No pins on this screen yet. Use “+ Add pin”.' : 'No pins match the current filter.');
-    root.replaceChildren(...[stepsNode, empty].filter(Boolean));
+    root.replaceChildren(el('div', { class: 'empty-note' },
+      total === 0 ? 'No comments on this screen yet.' : 'No comments match the current filter.'));
     return;
   }
-
-  root.replaceChildren(...[stepsNode, ...pins.map((p) => buildCard(ctx, p, view))].filter(Boolean));
+  root.replaceChildren(...pins.map((p) => buildCard(ctx, p, view)));
 }
 
 function buildCard(ctx, p, view) {
-  const { store, state, CATEGORIES, options } = ctx;
+  const { store, state, options } = ctx;
   const resolved = p.status === 'resolved';
   const authorName = p.author || 'Anonymous';
 
-  // ---- Header: avatar · spacer · category · resolve-button --------------
+  // ── Avatar (left column) ──
   const avatar = el('div',
     { class: 'comment-avatar', style: `background:${avatarColor(authorName)}`, title: authorName },
     initialOf(authorName));
 
-  const categoryControl = options.canEditNotes
-    ? buildCategorySelect(ctx, p)
-    : (p.category ? el('span', { class: 'cat-chip' }, p.category) : null);
-
-  const resolveBtn = options.canResolve
-    ? el('button', {
-        class: `resolve-btn ${resolved ? 'on' : ''}`,
-        title: resolved ? 'Mark as open' : 'Mark as resolved',
-        'aria-pressed': String(resolved),
-        onclick: (e) => { e.stopPropagation(); toggleResolve(ctx, p); },
-      }, checkSvg())
-    : null;
-
-  const head = el('div', { class: 'comment-head' }, [
-    avatar,
-    el('span', { class: 'comment-spacer' }),
-    categoryControl,
-    resolveBtn,
-  ].filter(Boolean));
-
-  // ---- Breadcrumb + byline ---------------------------------------------
-  const breadcrumb = el('div', { class: 'comment-breadcrumb' },
-    `#${p.index} · ${view.name || '(unnamed screen)'}`);
-
+  // ── Body column ──
+  const crumb = el('div', { class: 'comment-crumb' }, [
+    el('span', { class: 'comment-crumb-n' }, `#${p.index}`),
+    ' · ',
+    el('span', { class: 'comment-crumb-screen' }, view.name || '(unnamed screen)'),
+  ]);
   const byline = el('div', { class: 'comment-byline' }, [
     el('span', { class: 'comment-author' }, authorName),
-    el('span', { class: 'comment-byline-dot' }, ' · '),
-    el('span', { class: 'comment-time', title: p.createdAt || '' }, formatRelative(p.createdAt)),
+    el('span', { class: 'comment-time', title: p.createdAt || '' }, ` ${formatRelative(p.createdAt)}`),
   ]);
-
-  // ---- Note body --------------------------------------------------------
-  const noteEl = el('div', { class: `comment-note ${p.note ? '' : 'empty'}` },
-    p.note || '(no comment)');
+  const noteEl = el('div', { class: `comment-note ${p.note ? '' : 'empty'}` }, p.note || '(no comment)');
   if (options.canEditNotes) {
     noteEl.addEventListener('click', (e) => { e.stopPropagation(); startNoteEdit(ctx, noteEl, p); });
   }
 
-  // ---- Footer: delete (the only non-header action remaining) -----------
-  const children = [head, breadcrumb, byline, noteEl];
-  if (options.canDelete) {
-    children.push(el('div', { class: 'comment-foot' }, [
-      el('span', { class: 'comment-spacer' }),
-      el('button', { class: 'icon-btn danger', title: 'Delete pin',
-        onclick: (e) => { e.stopPropagation(); store.deletePin({ pinId: p.id }); } }, '🗑'),
-    ]));
+  const bodyKids = [crumb, byline, noteEl];
+  if (p.category) bodyKids.push(buildCategoryTag(p.category));
+  const body = el('div', { class: 'comment-body' }, bodyKids);
+
+  // ── Top-right actions (revealed on hover / when selected) ──
+  const actions = [];
+  const moreItems = buildMoreItems(ctx, p);
+  if (moreItems.length) {
+    const moreBtn = el('button', { class: 'comment-act', title: 'More', 'aria-haspopup': 'true',
+      onclick: (e) => { e.stopPropagation(); openMenu(moreBtn, moreItems, { align: 'right', width: 200 }); } });
+    moreBtn.append(icon('more', 15));
+    actions.push(moreBtn);
   }
+  if (options.canResolve) {
+    const resolveBtn = el('button', {
+      class: `resolve-btn ${resolved ? 'on' : ''}`,
+      title: resolved ? 'Mark as open' : 'Mark as resolved',
+      'aria-pressed': String(resolved),
+      onclick: (e) => { e.stopPropagation(); toggleResolve(ctx, p); },
+    });
+    resolveBtn.append(icon('check', 13, 2.25));
+    actions.push(resolveBtn);
+  }
+  const actionsWrap = actions.length ? el('div', { class: 'comment-actions' }, actions) : null;
 
   return el('div', {
     class: `comment ${p.id === state.activePinId ? 'active' : ''} ${resolved ? 'resolved' : ''}`,
     dataset: { id: p.id },
     onclick: () => ctx.setState({ activePinId: state.activePinId === p.id ? null : p.id }),
-  }, children);
+  }, [avatar, body, actionsWrap].filter(Boolean));
+}
+
+/** The `⋯` menu items for a card: category picker (+ clear) and delete. Each
+ *  gated by the surface's options, so the read-only artifact shows nothing. */
+function buildMoreItems(ctx, p) {
+  const { store, CATEGORIES, options } = ctx;
+  const items = [];
+  if (options.canEditNotes) {
+    items.push({ header: 'Category' });
+    for (const c of CATEGORIES) {
+      items.push({ label: cap(c), checked: p.category === c, onClick: () => store.updatePin({ pinId: p.id, category: c }) });
+    }
+    if (p.category) items.push({ label: 'Clear category', onClick: () => store.updatePin({ pinId: p.id, category: null }) });
+  }
+  if (options.canDelete) {
+    if (items.length) items.push({ separator: true });
+    items.push({ label: 'Delete comment', icon: 'trash', danger: true, onClick: () => store.deletePin({ pinId: p.id }) });
+  }
+  return items;
+}
+
+/** DesignOS CommentTag — a small surface-3 foot chip with a category dot. */
+const CATEGORY_COLORS = {
+  spacing: 'var(--accent)', color: 'var(--component)', text: 'var(--warning)',
+  interaction: 'var(--success)', 'code-pattern': 'var(--ink-mid)', component: 'var(--component)',
+  workflow: 'var(--accent-hi)', page: 'var(--ink-lo)',
+};
+function buildCategoryTag(category) {
+  return el('span', { class: 'comment-tag' }, [
+    el('span', { class: 'comment-tag-dot', style: `background:${CATEGORY_COLORS[category] || 'var(--ink-mid)'}` }),
+    cap(category),
+  ]);
 }
 
 /**
- * Resolve a comment without any completion-note prompt — Figma-style: a
- * bottom toast confirms the action and offers a one-tap Undo. Unresolving
- * (clicking the filled check again) silently flips status back to open
- * without a toast (the user did it intentionally; no need to confirm).
+ * Resolve without a completion-note prompt — a bottom toast confirms + offers
+ * Undo. Unresolving (clicking the filled check again) is silent.
  */
 function toggleResolve(ctx, p) {
   const wasResolved = p.status === 'resolved';
@@ -125,30 +143,6 @@ function toggleResolve(ctx, p) {
       undo: () => ctx.store.resolvePin({ pinId: p.id, resolved: false, resolvedNote: null }),
     });
   }
-}
-
-function buildCategorySelect(ctx, p) {
-  const { store, CATEGORIES } = ctx;
-  // The Figma "ellipsis" slot is the category control here — small,
-  // unobtrusive, opens to the standard taxonomy.
-  const sel = el('select', {
-    class: 'comment-category',
-    title: 'Category',
-    onclick: (e) => e.stopPropagation(),
-    onchange: (e) => {
-      e.stopPropagation();
-      store.updatePin({ pinId: p.id, category: e.target.value || null });
-    },
-  }, [
-    el('option', { value: '' }, '⋯'),  // empty / no category
-    ...ctx.CATEGORIES.map((c) => {
-      const o = el('option', { value: c }, c[0].toUpperCase() + c.slice(1));
-      if (c === p.category) o.selected = true;
-      return o;
-    }),
-  ]);
-  if (p.category) sel.classList.add('has-value');
-  return sel;
 }
 
 function startNoteEdit(ctx, noteEl, p) {
@@ -169,18 +163,15 @@ function startNoteEdit(ctx, noteEl, p) {
 
 // ---- Tiny presentation helpers ------------------------------------------
 
-/** First letter of the name (or "?" for anonymous), uppercase. */
+const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+
 function initialOf(name) {
   const s = String(name || '').trim();
-  if (!s) return '?';
-  return s[0].toUpperCase();
+  return s ? s[0].toUpperCase() : '?';
 }
 
-/**
- * Deterministic background color for the avatar from the author name. Uses a
- * small palette balanced against the Figma-dark theme so initials stay
- * legible in white. djb2-ish hash → palette index.
- */
+/** Deterministic avatar background from the author name (data identity, not
+ *  chrome — kept distinct so multiple authors read apart). djb2 → palette. */
 const AVATAR_PALETTE = [
   '#4e79a7', '#f28e2b', '#59a14f', '#e15759', '#76b7b2',
   '#edc948', '#b07aa1', '#ff9da7', '#9c755f', '#bab0ab',
@@ -206,23 +197,4 @@ function formatRelative(iso) {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d}d ago`;
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-/** Inline SVG check — matches Figma's "Mark as resolved" affordance shape. */
-function checkSvg() {
-  const ns = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(ns, 'svg');
-  svg.setAttribute('viewBox', '0 0 16 16');
-  svg.setAttribute('width', '14');
-  svg.setAttribute('height', '14');
-  svg.setAttribute('aria-hidden', 'true');
-  const path = document.createElementNS(ns, 'path');
-  path.setAttribute('d', 'M3.5 8.5l3 3 6-6');
-  path.setAttribute('fill', 'none');
-  path.setAttribute('stroke', 'currentColor');
-  path.setAttribute('stroke-width', '1.75');
-  path.setAttribute('stroke-linecap', 'round');
-  path.setAttribute('stroke-linejoin', 'round');
-  svg.appendChild(path);
-  return svg;
 }

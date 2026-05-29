@@ -1,38 +1,26 @@
-:root {
-  --bg: #1e1e1e; --bg-2: #2c2c2c; --bg-3: #383838; --bg-4: #444444;
-  --border: #3d3d3d; --border-strong: #555555;
-  --text: #eeeeee; --text-2: #a0a0a0; --text-3: #757575;
-  --accent: #0d99ff; --accent-hover: #1fa9ff; --accent-dim: rgba(13,153,255,0.16);
-  --selected-row: rgba(13,153,255,0.18);
-  --resolved: #3fb950; --resolved-dim: rgba(63,185,80,0.16);
-  --danger: #f0616d;
-}
+/* Design QA console — app styles.
+ *
+ * Re-based onto the DesignOS v2 token system AND its App Frame anatomy
+ * (Phase 8): no top bar (actions live in the panes), a collapsible left
+ * Screens sidebar (brand/collapse row + file header + search + .eyebrow
+ * section + rich rows), a dot-grid canvas with a floating QA-verb cluster,
+ * and a right Comments pane (in-pane presence + Share, search + overflow,
+ * flat borderless cards). Colors/radii/shadows/type reference DesignOS roles
+ * from tokens.css; no raw hex chrome colors. Atoms re-expressed in this
+ * buildless vanilla idiom. */
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { height: 100%; background: var(--bg); color: var(--text);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 12px; line-height: 1.45; overflow: hidden; -webkit-font-smoothing: antialiased; }
-button { font-family: inherit; color: inherit; cursor: pointer; }
-.mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-feature-settings: 'tnum'; }
+html, body { height: 100%; background: var(--surface-0); color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-12); line-height: 1.45; overflow: hidden; -webkit-font-smoothing: antialiased; }
+button { font-family: inherit; color: inherit; cursor: pointer; border: 0; background: none; }
+.mono { font-family: var(--font-mono); font-feature-settings: 'tnum', 'zero', 'ss01'; }
 
-/* Layout: top bar + three-pane body. Columns resizable via CSS (Phase-1 ask). */
-.app { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
-.topbar { display: flex; align-items: center; gap: 16px; padding: 8px 16px;
-  background: var(--bg-2); border-bottom: 1px solid var(--border); }
-.topbar .session-name { font-size: 13px; font-weight: 600; }
-.topbar .spacer { flex: 1; }
-.topbar .live { display: none; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); }
-.topbar .live.on { display: inline-flex; }
-/* Phase 6: same slot doubles as the archived-session indicator in lookback. */
-.topbar .live.archived { display: inline-flex; color: var(--text-2); }
-.topbar .live.archived .dot { display: none; }
-.topbar .live .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 var(--accent); animation: live-pulse 1.6s infinite; }
-@keyframes live-pulse { 0% { box-shadow: 0 0 0 0 rgba(13,153,255,0.5); } 70% { box-shadow: 0 0 0 6px rgba(13,153,255,0); } 100% { box-shadow: 0 0 0 0 rgba(13,153,255,0); } }
-
+/* ── Shell: three-pane body, no top bar. Columns resizable. */
+.app { height: 100vh; }
 .body { position: relative; display: grid;
   grid-template-columns: var(--col-left, 260px) 1fr var(--col-right, 360px);
-  /* Constrain the (otherwise auto) row to the body height so a tall screenshot
-     scrolls inside .canvas rather than stretching the pane past the viewport. */
-  grid-template-rows: minmax(0, 1fr); min-height: 0; }
+  grid-template-rows: minmax(0, 1fr); height: 100vh; min-height: 0; }
 
 /* Sidebar resize handles — thin hit-area on each pane boundary, accent on hover/drag. */
 .resizer { position: absolute; top: 0; bottom: 0; width: 8px; z-index: 50; cursor: col-resize; }
@@ -42,259 +30,367 @@ button { font-family: inherit; color: inherit; cursor: pointer; }
 .resizer-left { left: calc(var(--col-left, 260px) - 4px); }
 .resizer-right { right: calc(var(--col-right, 360px) - 4px); }
 
-/* Controls */
-.btn { padding: 5px 12px; border-radius: 6px; border: 1px solid var(--border-strong);
-  background: var(--bg-3); color: var(--text); font-size: 12px; font-weight: 500; }
-.btn:hover { background: var(--bg-4); }
-.btn.primary { background: var(--accent); border-color: transparent; color: #fff; }
-.btn.primary:hover { background: var(--accent-hover); }
-.btn.active { background: var(--accent); border-color: transparent; color: #fff; }
-.select { padding: 4px 8px; border-radius: 6px; border: 1px solid var(--border-strong);
-  background: var(--bg-3); color: var(--text); font-size: 11px; }
+/* ── Buttons (Button atom) + icon-button (square hover-well) ── */
+.btn { height: var(--ctl-lg); padding: 0 14px; display: inline-flex; align-items: center; gap: var(--s-3);
+  border-radius: var(--r-2); box-shadow: inset 0 0 0 1px var(--stroke);
+  background: var(--surface-2); color: var(--ink-hi); font-size: var(--fs-12); font-weight: 600;
+  white-space: nowrap; transition: background 90ms; }
+.btn:hover { background: var(--surface-3); }
+.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn.primary { background: var(--accent); box-shadow: none; color: var(--accent-ink); }
+.btn.primary:hover { background: var(--accent-hi); }
+.btn.active { background: var(--accent); box-shadow: none; color: var(--accent-ink); }
+.icon-btn { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-control); color: var(--ink-mid); background: transparent; transition: background 90ms, color 90ms; }
+.icon-btn:hover { background: var(--surface-3); color: var(--ink-hi); }
+.icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.icon-btn.sm { width: 22px; height: 22px; }
+.icon-btn.danger:hover { color: var(--danger); background: var(--danger-tint); }
+/* Recessed search well, shared by both panes (DesignOS sidebar search idiom). */
+.search-well { display: flex; align-items: center; gap: var(--s-3); height: var(--ctl-lg);
+  padding: 0 var(--s-4); border-radius: var(--r-control); background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--stroke-soft); }
+.search-well .search-ic { color: var(--ink-mid); flex-shrink: 0; }
+.search-input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent;
+  color: var(--ink-hi); font-family: inherit; font-size: var(--fs-12); }
+.search-input::placeholder { color: var(--ink-lo); }
+/* Recess select (used inside the overflow popover + session switcher). */
+.select { height: var(--ctl-md); padding: 0 8px; border-radius: var(--r-control);
+  box-shadow: inset 0 0 0 1px var(--stroke); background: var(--surface-2);
+  color: var(--ink-hi); font-size: var(--fs-11); font-family: inherit; }
+.select:hover { box-shadow: inset 0 0 0 1px var(--stroke-hi); }
+.select:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
 
-/* Sidebar — screens */
-.sidebar { background: var(--bg-2); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-.sidebar-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
-.sidebar-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); font-weight: 600; }
-.sidebar-meta { font-size: 11px; color: var(--text-3); margin-top: 4px; }
-.view-list { overflow-y: auto; flex: 1; padding: 6px 0; }
-.view-item { padding: 10px 16px; cursor: pointer; transition: background 0.08s; }
-.view-item:hover { background: var(--bg-3); }
-.view-item.active { background: var(--accent-dim); }
-.view-name { font-size: 12px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.view-sub { font-size: 10px; color: var(--text-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.view-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 10px; color: var(--text-3); }
-.pin-count { flex-shrink: 0; padding: 1px 7px; border-radius: 999px; background: var(--bg-3);
-  border: 1px solid var(--border); font-size: 10px; font-weight: 600; color: var(--text-2); }
-.view-item.active .pin-count { background: var(--accent); color: #fff; border-color: transparent; }
-.sidebar-footer { padding: 10px 12px; border-top: 1px solid var(--border); }
-.sidebar-footer .btn { width: 100%; }
+/* ── LEFT — Screens sidebar (App Frame anatomy) ── */
+.sidebar { background: var(--surface-1); border-right: 1px solid var(--stroke-soft);
+  display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
+.brand-row { height: var(--cluster-h); display: flex; align-items: center; padding: var(--s-3); gap: var(--s-2); }
+.brand-mark { width: 28px; height: 28px; border-radius: var(--r-3); flex-shrink: 0;
+  background: var(--grad-tool); color: var(--grad-tool-ink);
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.12), inset 0 -1px 0 oklch(0 0 0 / 0.18); }
+.brand-spacer { flex: 1; }
+.file-header { padding: 2px 12px 12px; display: flex; flex-direction: column; gap: var(--s-1); }
+.file-name-row { display: flex; align-items: center; gap: var(--s-3); min-width: 0; }
+.file-name { font-size: var(--fs-13); font-weight: 600; color: var(--ink-hi); letter-spacing: -0.005em;
+  flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* Session switcher chevron (DesignOS FileTrigger) — app.mjs appends it. */
+.file-menu-trigger { flex-shrink: 0; width: 18px; height: 18px; border-radius: var(--r-2);
+  display: inline-flex; align-items: center; justify-content: center; color: var(--ink-mid);
+  background: transparent; transition: background 80ms, color 80ms; }
+.file-menu-trigger:hover { background: var(--surface-3); color: var(--ink-hi); }
+.file-sub { font-size: var(--fs-11); color: var(--ink-lo); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar-search { padding: 0 10px 10px; }
+.section-header { display: flex; align-items: center; justify-content: space-between; padding: 4px 12px 6px; }
+.view-list { overflow-y: auto; flex: 1; padding: 0 var(--s-3) var(--s-6); }
+/* Rich screen rows — selected = neutral surface-4 (App Frame page-row pattern). */
+.view-item { padding: var(--s-3) var(--s-4); border-radius: var(--r-2); cursor: pointer; transition: background 0.08s; }
+.view-item:hover { background: var(--row-hover); }
+.view-item.active { background: var(--surface-4); }
+.view-name { font-size: var(--fs-12); font-weight: 500; color: var(--ink-hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-item.active .view-name { color: var(--ink-hi); }
+.view-sub { font-size: var(--fs-10); color: var(--ink-lo); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.view-meta { display: flex; justify-content: space-between; align-items: center; margin-top: var(--s-2); font-size: var(--fs-10); color: var(--ink-lo); }
+/* Pin-count — Badge atom (neutral; accent on the selected row). */
+.pin-count { flex-shrink: 0; min-width: 16px; height: 16px; padding: 0 5px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-pill); background: var(--surface-3);
+  font-size: var(--fs-10); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--ink-mid); }
+.view-item.active .pin-count { background: var(--accent); color: var(--accent-ink); }
 
-/* Canvas — pin-on-image editor */
-.canvas-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
-.canvas-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
-.canvas-toolbar .hint { font-size: 11px; color: var(--text-3); }
-.canvas { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 24px; }
+/* Screen rows: name line + hover ⋯ action (DesignOS PageRow "action" variant). */
+.view-row { display: flex; align-items: center; gap: var(--s-3); min-width: 0; }
+.view-row .view-name { flex: 1; }
+.view-action { flex-shrink: 0; width: 22px; height: 22px; border-radius: var(--r-2);
+  display: inline-flex; align-items: center; justify-content: center; color: var(--ink-mid);
+  background: transparent; opacity: 0; transition: opacity 0.1s, background 80ms, color 80ms; }
+.view-item:hover .view-action, .view-item:focus-within .view-action { opacity: 1; }
+.view-action:hover { background: var(--surface-3); color: var(--ink-hi); }
+
+/* ── CENTER — dot-grid canvas + floating QA-verb cluster ── */
+.canvas-pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--surface-0); position: relative; }
+.canvas { flex: 1; overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: var(--s-9); }
+.canvas.dotgrid { background-image: radial-gradient(circle at 1px 1px, oklch(0.86 0.002 250 / 0.05) 1px, transparent 0); background-size: 16px 16px; }
 .canvas.placing { cursor: crosshair; }
-.canvas .empty { color: var(--text-3); margin-top: 64px; font-size: 13px; }
-.screenshot-wrapper { position: relative; display: inline-block; box-shadow: 0 8px 32px rgba(0,0,0,0.45); border-radius: 6px; max-width: 100%; }
+.canvas .empty { color: var(--ink-lo); margin-top: 64px; font-size: var(--fs-13); }
+.screenshot-wrapper { position: relative; display: inline-block; box-shadow: var(--shadow-3); border-radius: var(--r-3); max-width: 100%; }
 .canvas.placing .screenshot-wrapper { cursor: crosshair; }
-.screenshot { display: block; max-width: 100%; border-radius: 6px; }
-.no-screenshot { padding: 32px; background: var(--bg-2); border: 1px dashed var(--border); border-radius: 6px; color: var(--text-2); }
-.locked-screen { max-width: 420px; margin: 64px auto 0; padding: 28px; text-align: center;
-  background: var(--bg-2); border: 1px solid var(--border); border-radius: 8px; }
-.locked-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600;
-  color: var(--accent); margin-bottom: 10px; }
-.locked-badge::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--accent);
+.screenshot { display: block; max-width: 100%; border-radius: var(--r-3); }
+.no-screenshot { padding: var(--s-10); background: var(--surface-1); border: 1px dashed var(--stroke-hi); border-radius: var(--r-4); color: var(--ink-mid); }
+.locked-screen { max-width: 420px; margin: 64px auto 0; padding: var(--s-10); text-align: center;
+  background: var(--surface-1); border: 1px solid var(--stroke); border-radius: var(--r-4); }
+.locked-badge { display: inline-flex; align-items: center; gap: var(--s-3); font-size: var(--fs-12); font-weight: 600;
+  color: var(--accent); margin-bottom: var(--s-5); }
+.locked-badge::before { content: ''; width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--accent);
   animation: live-pulse 1.6s infinite; }
-.locked-msg { font-size: 12px; line-height: 1.5; color: var(--text-2); }
+.locked-msg { font-size: var(--fs-12); line-height: 1.5; color: var(--ink-mid); }
 
-/* Pin marker — Figma comment teardrop */
+.canvas-cluster { position: absolute; bottom: var(--s-8); left: 50%; transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: var(--s-4); height: var(--cluster-h);
+  padding: 0 var(--s-5) 0 var(--s-3); background: var(--surface-1); border-radius: var(--r-float);
+  box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft); z-index: 30; max-width: calc(100% - 48px); }
+.cluster-btn { height: var(--ctl-lg); padding: 0 12px; display: inline-flex; align-items: center; gap: var(--s-3);
+  border-radius: var(--r-control); background: transparent; color: var(--ink-mid); font-size: var(--fs-12); font-weight: 500;
+  transition: background 90ms, color 90ms; }
+.cluster-btn:hover { background: var(--surface-3); color: var(--ink-hi); }
+.cluster-btn.active { background: var(--accent); color: var(--accent-ink); }
+.cluster-hint { font-size: var(--fs-11); color: var(--ink-lo); padding-right: var(--s-2); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+
+/* Pin marker — DesignOS Pin atom (teardrop, tail at bottom-left toward the
+   anchor). A contrasting accent-ink ring keeps it legible on screenshots. */
 .marker { position: absolute; width: 24px; height: 24px;
-  background: var(--accent); color: #fff; border-radius: 100% 100% 100% 0;
-  font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 0 0 1.5px #fff;
+  background: var(--accent); color: var(--accent-ink); border-radius: 50% 50% 50% 2px;
+  font-size: var(--fs-10); font-weight: 700; display: flex; align-items: center; justify-content: center;
+  box-shadow: var(--shadow-2), 0 0 0 1.5px var(--accent-ink);
   cursor: grab; user-select: none; transition: transform 0.1s, background 0.1s;
-  transform: translate(0, -100%); /* anchor tail at (x,y) */ }
+  transform: translate(0, -100%); }
 .marker.no-move { cursor: pointer; }
 .marker > span { transform: translate(1px, -1px); pointer-events: none; }
-.marker:hover { background: var(--accent-hover); }
-.marker.active { background: var(--accent-hover); box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #fff, 0 0 0 4px rgba(13,153,255,0.4); }
+.marker:hover { background: var(--accent-hi); }
+.marker.active { background: var(--accent-hi); box-shadow: var(--shadow-2), 0 0 0 1.5px var(--accent-ink), 0 0 0 4px var(--accent-glow); }
 .marker.dragging { cursor: grabbing; opacity: 0.85; transition: none; }
-.marker.resolved { background: var(--resolved); }
-.marker.resolved:hover { background: #4cc663; }
-.marker.resolved.active { box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #fff, 0 0 0 4px var(--resolved-dim); }
+.marker.resolved { background: var(--surface-4); color: var(--ink-mid); }
+.marker.resolved:hover { background: var(--surface-5); }
+.marker.resolved.active { box-shadow: var(--shadow-2), 0 0 0 1.5px var(--accent-ink), 0 0 0 4px var(--success-tint); }
 
-/* Composer pill for a brand-new pin */
+/* Composer pill for a brand-new pin — floating overlay surface. */
 .composer { position: absolute; transform: translate(0, -100%); z-index: 20;
-  display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 10px;
-  background: var(--bg-2); border: 1px solid var(--border-strong); border-radius: 999px;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.5); }
-.composer input { background: transparent; border: none; outline: none; color: var(--text);
-  font-family: inherit; font-size: 12px; width: 260px; }
-.composer input::placeholder { color: var(--text-3); }
-.composer .send { width: 26px; height: 26px; border-radius: 50%; border: none;
-  background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; }
-.composer .send:hover { background: var(--accent-hover); }
+  display: flex; align-items: center; gap: var(--s-3); padding: 4px 4px 4px 10px;
+  background: var(--surface-overlay); border-radius: var(--r-pill);
+  box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft); }
+.composer input { background: transparent; border: none; outline: none; color: var(--ink-hi);
+  font-family: inherit; font-size: var(--fs-12); width: 260px; }
+.composer input::placeholder { color: var(--ink-lo); }
+.composer .send { width: 26px; height: 26px; border-radius: var(--r-pill); border: none;
+  background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; }
+.composer .send:hover { background: var(--accent-hi); }
 
-/* Comments panel */
-.comments { background: var(--bg-2); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-.comments-header { padding: 12px 16px; border-bottom: 1px solid var(--border); }
-.comments-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); font-weight: 600; }
-.comments-page { font-size: 13px; font-weight: 600; margin-top: 4px; word-break: break-word; }
-.comments-filters { display: flex; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
-.comments-list { overflow-y: auto; flex: 1; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-.comment { padding: 12px 14px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border);
-  cursor: pointer; transition: background 0.08s, border-color 0.08s; }
-.comment:hover { background: var(--bg-3); border-color: var(--border-strong); }
-.comment.active { background: var(--selected-row); border-color: transparent; }
+/* ── RIGHT — Comments pane (App Frame anatomy) ── */
+.comments { background: var(--surface-1); border-left: 1px solid var(--stroke-soft);
+  display: flex; flex-direction: column; overflow: hidden; min-width: 0; position: relative; }
+/* In-pane action cluster: presence + Share (no top bar). */
+.actions-row { height: var(--cluster-h); display: flex; align-items: center; padding: var(--s-3); gap: var(--s-4); }
+.presence { display: inline-flex; align-items: center; gap: var(--s-1); height: var(--ctl-lg);
+  padding: 0 var(--s-2); border-radius: var(--r-control); color: var(--ink-mid); cursor: default; }
+.presence:hover { background: var(--surface-3); }
+.presence-avatar { width: 20px; height: 20px; border-radius: var(--r-pill); flex-shrink: 0;
+  background: var(--grad-avatar); box-shadow: inset 0 0 0 1px var(--stroke-soft);
+  color: var(--accent-ink); font-size: var(--fs-10); font-weight: 700;
+  display: inline-flex; align-items: center; justify-content: center; }
+.actions-spacer { flex: 1; }
+.live { display: none; align-items: center; gap: var(--s-2); font-size: var(--fs-11); color: var(--ink-mid); }
+.live.on { display: inline-flex; }
+.live.archived { display: inline-flex; color: var(--ink-mid); }
+.live.archived .dot { display: none; }
+.live .dot { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--accent); box-shadow: 0 0 0 0 var(--accent); animation: live-pulse 1.6s infinite; }
+@keyframes live-pulse {
+  0%   { box-shadow: 0 0 0 0 var(--accent-glow); }
+  70%  { box-shadow: 0 0 0 6px oklch(0.66 0.18 var(--accent-h) / 0); }
+  100% { box-shadow: 0 0 0 0 oklch(0.66 0.18 var(--accent-h) / 0); }
+}
+/* Right-pane tabs — DesignOS Sidebar-Steps pill tabs: active = surface-4 fill +
+   ink-hi + weight 600; hover = surface-3. */
+.tabs { display: flex; align-items: center; gap: var(--s-2); height: 34px; padding: 0 var(--s-4); }
+.tab { height: var(--ctl-md); padding: 0 var(--s-5); display: inline-flex; align-items: center;
+  border-radius: var(--r-control); background: transparent; color: var(--ink-mid);
+  font-size: var(--fs-12); font-weight: 500; transition: background 80ms, color 80ms; }
+.tab:hover { background: var(--surface-3); color: var(--ink-hi); }
+.tab.active { background: var(--surface-4); color: var(--ink-hi); font-weight: 600; }
+/* Padding matches the tabs' horizontal inset (var(--s-4)) so the search field
+   left-aligns with the tab pills, with symmetric L/R + top breathing room. */
+.comments-search-row { padding: var(--s-4); display: flex; align-items: center; gap: var(--s-3); position: relative; }
+.comments-search-row[hidden] { display: none; }
+.comments-search-row .search-well { flex: 1; }
+.overflow-menu { position: absolute; top: calc(100% + 4px); right: var(--s-4); z-index: 40; width: 232px;
+  background: var(--surface-overlay); border-radius: var(--r-4);
+  box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft); padding: var(--s-4);
+  display: flex; flex-direction: column; gap: var(--s-4); }
+.overflow-menu[hidden] { display: none; }
+.overflow-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4);
+  font-size: var(--fs-11); color: var(--ink-mid); }
+.overflow-row .select { width: 132px; }
+.comments-list { overflow-y: auto; flex: 1; padding: 4px 6px 80px; display: flex; flex-direction: column; gap: 1px; }
+
+/* Comment cards — DesignOS CommentCard: avatar LEFT, body RIGHT, actions
+   revealed top-right on hover/selected/resolved. Flat (no border); selected =
+   quiet accent tint. */
+.comment { position: relative; display: flex; gap: var(--s-4); padding: 10px;
+  border-radius: var(--r-3); background: transparent; cursor: pointer; transition: background 0.08s; }
+.comment:hover { background: var(--row-hover); }
+.comment.active { background: var(--row-selected-accent); }
 .comment.resolved { opacity: 0.7; }
-
-/* Figma-style header: avatar on the left, category + resolve button on the
-   right. The category control fades in on hover (Figma-like overflow slot);
-   the resolve button always shows when a comment is resolved. */
-.comment-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.comment-avatar { flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
+.comment-avatar { flex-shrink: 0; width: 24px; height: 24px; border-radius: var(--r-pill);
   display: flex; align-items: center; justify-content: center;
-  color: #fff; font-size: 11px; font-weight: 600; letter-spacing: 0.02em; }
-.comment-spacer { flex: 1; }
-
-/* Category dropdown lives where Figma's `...` overflow sits. Reveals on
-   card hover or when already set; otherwise stays subtle. */
-.comment-category { background: transparent; color: var(--text-3); border: 1px solid transparent;
-  border-radius: 6px; font-size: 11px; padding: 2px 4px; opacity: 0;
-  transition: opacity 0.1s, border-color 0.1s, color 0.1s; text-transform: capitalize; }
-.comment:hover .comment-category,
-.comment-category.has-value,
-.comment-category:focus { opacity: 1; }
-.comment-category.has-value { color: var(--text-2); border-color: var(--border); background: var(--bg-3); }
-.comment-category:hover { color: var(--text); border-color: var(--border-strong); }
-
-/* Circular "Mark as resolved" button. Outline by default, filled when on. */
-.resolve-btn { flex-shrink: 0; width: 22px; height: 22px; border-radius: 50%;
-  border: 1px solid var(--border-strong); background: transparent; color: var(--text-2);
+  box-shadow: inset 0 0 0 1px var(--stroke-soft);
+  color: var(--accent-ink); font-size: var(--fs-11); font-weight: 700; letter-spacing: 0.02em; }
+.comment-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.comment-crumb { font-size: var(--fs-11); color: var(--ink-lo); }
+.comment-crumb-n { color: var(--ink-mid); }
+.comment-byline { font-size: var(--fs-11); color: var(--ink-hi); }
+.comment-author { font-weight: 600; color: var(--ink-hi); margin-right: 2px; }
+.comment-time { color: var(--ink-lo); font-weight: 400; }
+.comment-note { font-size: var(--fs-12); line-height: 1.45; color: var(--ink); margin-top: 2px;
+  white-space: pre-wrap; word-break: break-word; }
+.comment-note.empty { color: var(--ink-lo); font-style: italic; }
+.comment-note-edit { width: 100%; margin-top: 2px; background: var(--surface-3); border: 0;
+  box-shadow: inset 0 0 0 1px var(--stroke-hi); border-radius: var(--r-2); color: var(--ink-hi);
+  font-family: inherit; font-size: var(--fs-13); padding: var(--s-4); resize: vertical; min-height: 60px; }
+.comment-note-edit:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
+/* Foot category tag (DesignOS CommentTag) — surface-3 chip + category dot. */
+.comment-tag { align-self: flex-start; display: inline-flex; align-items: center; gap: 5px;
+  margin-top: var(--s-4); padding: 1px 6px 1px 5px; height: 16px; background: var(--surface-3);
+  color: var(--ink-mid); font-size: var(--fs-10); font-weight: 500; border-radius: var(--r-1);
+  text-transform: capitalize; }
+.comment-tag-dot { width: 6px; height: 6px; border-radius: var(--r-pill); flex-shrink: 0; }
+/* Top-right actions: ⋯ overflow + resolve check. */
+.comment-actions { position: absolute; top: 6px; right: 6px; display: inline-flex; gap: var(--s-1);
+  opacity: 0; transition: opacity 0.1s; }
+.comment:hover .comment-actions, .comment.active .comment-actions, .comment.resolved .comment-actions { opacity: 1; }
+.comment-act { width: 22px; height: 22px; border-radius: var(--r-2); padding: 0; display: inline-flex;
+  align-items: center; justify-content: center; color: var(--ink-mid); background: transparent;
+  transition: background 80ms, color 80ms; }
+.comment-act:hover { background: var(--surface-3); color: var(--ink-hi); }
+.resolve-btn { width: 22px; height: 22px; border-radius: var(--r-pill); padding: 0;
   display: inline-flex; align-items: center; justify-content: center; cursor: pointer;
-  transition: background 0.08s, color 0.08s, border-color 0.08s; padding: 0; }
-.resolve-btn:hover { color: var(--text); border-color: var(--text-2); }
-.resolve-btn.on { background: var(--resolved); border-color: var(--resolved); color: #fff; }
-.resolve-btn.on:hover { background: var(--resolved); filter: brightness(1.08); }
+  color: var(--ink-mid); background: transparent; box-shadow: inset 0 0 0 1px var(--stroke-hi);
+  transition: background 0.08s, color 0.08s, box-shadow 0.08s; }
+.resolve-btn:hover { color: var(--ink-hi); box-shadow: inset 0 0 0 1px var(--ink-mid); }
+.resolve-btn.on { background: var(--success); box-shadow: none; color: var(--accent-ink); }
+.resolve-btn.on:hover { background: var(--success); filter: brightness(1.08); }
+.empty-note { padding: var(--s-8) var(--s-6); color: var(--ink-lo); }
 
-/* Breadcrumb and byline match Figma's two-line metadata. */
-.comment-breadcrumb { font-size: 11px; color: var(--text-2); margin-bottom: 2px; word-break: break-word; }
-.comment-byline { font-size: 11px; color: var(--text-2); margin-bottom: 8px; }
-.comment-author { color: var(--text); font-weight: 500; }
-.comment-byline-dot, .comment-time { color: var(--text-3); }
+/* Floating menu (DesignOS Menu/MenuItem) — session list, screen + card actions. */
+.os-menu { position: fixed; z-index: 1300; padding: var(--s-2);
+  background: var(--surface-overlay); border-radius: var(--r-4);
+  box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke); color: var(--ink-hi);
+  display: flex; flex-direction: column; }
+.os-menu-item { height: 26px; display: flex; align-items: center; gap: var(--s-4);
+  padding: 0 var(--s-5); font-size: var(--fs-12); border-radius: var(--r-2); cursor: pointer; color: var(--ink-hi); }
+.os-menu-item:hover { background: var(--surface-4); }
+.os-menu-item.danger { color: var(--danger); }
+.os-menu-item.danger:hover { background: var(--danger-tint); }
+.os-menu-ic { display: inline-flex; color: var(--ink-mid); }
+.os-menu-item.danger .os-menu-ic { color: var(--danger); }
+.os-menu-label { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.os-menu-check { display: inline-flex; color: var(--ink-mid); margin-left: auto; }
+.os-menu-sep { height: 1px; margin: 4px 6px; background: var(--stroke-soft); }
+.os-menu-header { padding: 6px 8px 2px; }
 
-/* Legacy chip retained for read-only displays (no canEditNotes). */
-.cat-chip { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--bg-3);
-  border: 1px solid var(--border); color: var(--text-2); text-transform: capitalize; }
-
-.comment-note { font-size: 13px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
-.comment-note.empty { color: var(--text-3); font-style: italic; }
-.comment-note-edit { width: 100%; background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: 6px; color: var(--text); font-family: inherit; font-size: 13px; padding: 8px; resize: vertical; min-height: 60px; }
-.comment-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
-.icon-btn { background: none; border: none; color: var(--text-3); padding: 2px; font-size: 13px; line-height: 1; }
-.icon-btn:hover { color: var(--text); }
-.icon-btn.danger:hover { color: var(--danger); }
-.empty-note { padding: 18px 14px; color: var(--text-3); }
+/* Steps tab head (count + Preview spec). */
+.steps-tab-head { display: flex; align-items: center; gap: var(--s-4); padding: 6px 6px 8px; }
+.steps-tab-count { font-size: var(--fs-11); color: var(--ink-mid); }
+.steps-tab-head .steps-preview-btn { margin-left: auto; }
 
 /* Toast: bottom-centered Figma-style pill with optional Undo and close. */
-.toast-host { position: fixed; left: 0; right: 0; bottom: 24px; display: flex;
+.toast-host { position: fixed; left: 0; right: 0; bottom: var(--s-9); display: flex;
   justify-content: center; pointer-events: none; z-index: 1000; }
 .toast { pointer-events: auto; display: inline-flex; align-items: center; gap: 4px;
-  background: #1f1f1f; color: var(--text); border: 1px solid var(--border-strong);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.45); border-radius: 999px;
-  padding: 6px 8px 6px 16px; font-size: 13px; min-width: 240px;
+  background: var(--surface-overlay); color: var(--ink); box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
+  border-radius: var(--r-pill);
+  padding: var(--s-3) var(--s-4) var(--s-3) var(--s-7); font-size: var(--fs-13); min-width: 240px;
   opacity: 0; transform: translateY(6px); transition: opacity 0.16s, transform 0.16s; }
 .toast.in { opacity: 1; transform: translateY(0); }
 .toast.out { opacity: 0; transform: translateY(6px); }
-.toast-msg { font-weight: 500; padding-right: 6px; }
-.toast-action { background: transparent; color: var(--text); border: 1px solid var(--border-strong);
-  border-radius: 999px; padding: 3px 10px; font-size: 12px; cursor: pointer; }
-.toast-action:hover { background: var(--bg-3); }
-.toast-close { background: transparent; color: var(--text-2); border: none; cursor: pointer;
-  font-size: 17px; line-height: 1; padding: 0 6px; }
-.toast-close:hover { color: var(--text); }
+.toast-msg { font-weight: 500; padding-right: var(--s-3); }
+.toast-action { background: transparent; color: var(--ink-hi); box-shadow: inset 0 0 0 1px var(--stroke-hi);
+  border-radius: var(--r-pill); padding: 3px 10px; font-size: var(--fs-12); cursor: pointer; }
+.toast-action:hover { background: var(--surface-3); }
+.toast-close { background: transparent; color: var(--ink-mid); border: none; cursor: pointer;
+  font-size: 17px; line-height: 1; padding: 0 var(--s-3); }
+.toast-close:hover { color: var(--ink-hi); }
 
-/* Export dialog (Phase 7): center-of-screen Figma-dark chooser. Pick a shape
-   (single file vs bundle.zip), Next → native OS save dialog. One open at a
-   time; backdrop click + Esc close. */
-.export-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+/* Export dialog (Phase 7): center-of-screen chooser. */
+.export-backdrop { position: fixed; inset: 0; background: oklch(0 0 0 / 0.45);
   display: flex; align-items: center; justify-content: center; z-index: 1100; }
-.export-dialog { background: var(--bg-2); border: 1px solid var(--border-strong);
-  border-radius: 8px; box-shadow: 0 16px 48px rgba(0,0,0,0.6);
-  min-width: 440px; max-width: 560px; padding: 14px 16px; color: var(--text); }
-.export-dialog-head { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
-.export-dialog-title { font-size: 13px; font-weight: 600; flex: 1; }
-.export-options { display: flex; flex-direction: column; gap: 8px; }
-.export-option { display: flex; gap: 12px; padding: 10px 12px; border: 1px solid var(--border);
-  border-radius: 6px; cursor: pointer; background: var(--bg-3); align-items: flex-start; }
-.export-option:hover { border-color: var(--border-strong); }
-.export-option.selected { border-color: var(--accent); background: var(--accent-dim); }
+.export-dialog { background: var(--surface-1); border: 1px solid var(--stroke-hi);
+  border-radius: var(--r-5); box-shadow: var(--shadow-4);
+  min-width: 440px; max-width: 560px; padding: var(--s-6) var(--s-7); color: var(--ink); }
+.export-dialog-head { display: flex; align-items: center; gap: var(--s-5); margin-bottom: var(--s-6); }
+.export-dialog-title { font-size: var(--fs-13); font-weight: 600; color: var(--ink-hi); flex: 1; }
+.export-options { display: flex; flex-direction: column; gap: var(--s-4); }
+.export-option { display: flex; gap: var(--s-6); padding: var(--s-5) var(--s-6); border: 1px solid var(--stroke);
+  border-radius: var(--r-3); cursor: pointer; background: var(--surface-2); align-items: flex-start; }
+.export-option:hover { border-color: var(--stroke-hi); }
+.export-option.selected { border-color: var(--accent); background: var(--accent-tint); }
 .export-option input[type="radio"] { margin-top: 3px; accent-color: var(--accent); }
-.export-option-body { display: flex; flex-direction: column; gap: 4px; }
-.export-option-title { font-size: 13px; font-weight: 600; }
-.export-option-sub { font-size: 12px; color: var(--text-2); line-height: 1.4; }
-.export-dialog-foot { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.export-option-body { display: flex; flex-direction: column; gap: var(--s-2); }
+.export-option-title { font-size: var(--fs-13); font-weight: 600; color: var(--ink-hi); }
+.export-option-sub { font-size: var(--fs-12); color: var(--ink-mid); line-height: 1.4; }
+.export-dialog-foot { display: flex; justify-content: flex-end; gap: var(--s-4); margin-top: var(--s-7); }
 
-/* Steps disclosure (Spike 8 / 9d): `▸ Steps (N) [Preview spec]` row above
-   the comment cards. Toggle expands a numbered list with per-row [edit]/[×].
-   Mirrors the Figma-style overflow + resolve patterns already shipped here. */
-.steps-block { margin: 0 0 12px; padding: 10px 14px; background: var(--bg-2);
-  border: 1px solid var(--border); border-radius: 8px; }
-.steps-disclosure { display: flex; align-items: center; gap: 10px; }
-.steps-toggle { background: none; border: none; color: var(--text-2);
-  font-size: 12px; font-weight: 500; padding: 2px 4px; border-radius: 4px;
-  display: inline-flex; align-items: center; gap: 6px; }
-.steps-toggle:hover { color: var(--text); background: var(--bg-3); }
-.steps-preview-btn { margin-left: auto; background: transparent; color: var(--accent);
-  border: 1px solid transparent; border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 500; }
-.steps-preview-btn:hover { background: var(--accent-dim); border-color: var(--accent); }
-.steps-list { list-style: none; margin: 10px 0 2px; padding: 0;
-  display: flex; flex-direction: column; gap: 2px; }
-.step-row { display: grid; grid-template-columns: 22px 1fr auto; gap: 6px;
-  align-items: baseline; padding: 4px 6px; border-radius: 4px; font-size: 12px; }
-.step-row:hover { background: var(--bg-3); }
-.step-num { color: var(--text-3); font-variant-numeric: tabular-nums; text-align: right; }
-.step-text { color: var(--text); cursor: text; word-break: break-word; }
-.step-text.step-omitted { text-decoration: line-through; color: var(--text-3); cursor: default; }
-.step-text-edit { width: 100%; background: var(--bg-3); border: 1px solid var(--border-strong);
-  border-radius: 4px; padding: 3px 6px; color: var(--text); font-size: 12px; font-family: inherit; }
-.step-text-edit:focus { outline: none; border-color: var(--accent); }
-.step-actions { display: inline-flex; gap: 4px; opacity: 0; transition: opacity 0.1s; }
-.step-row:hover .step-actions, .step-row.is-omitted .step-actions { opacity: 1; }
-.step-act-btn { background: transparent; color: var(--text-3); border: 1px solid transparent;
-  border-radius: 4px; padding: 1px 6px; font-size: 11px; line-height: 1.3; }
-.step-act-btn:hover { color: var(--text); background: var(--bg-4); border-color: var(--border); }
-.step-act-omit { font-weight: 600; }
-.steps-empty { padding: 10px 4px 2px; color: var(--text-3); font-size: 12px; }
+/* Steps tab — DesignOS "Sidebar Steps" timeline (steps-panel.jsx). */
+.steps-preview-btn { background: transparent; color: var(--accent);
+  border: 1px solid transparent; border-radius: var(--r-2); padding: 3px 10px; font-size: var(--fs-12); font-weight: 500; }
+.steps-preview-btn:hover { background: var(--accent-tint); border-color: var(--accent); }
+.steps-empty { padding: 40px 16px; text-align: center; color: var(--ink-lo); font-size: var(--fs-12); }
+.steps-rail-list { padding: 2px 12px 16px; display: flex; flex-direction: column; }
+/* One tile: left dot/line rail + body (stamp / target / meta). */
+.step-tile { position: relative; display: flex; gap: var(--s-6); padding: 0 var(--s-3); border-radius: var(--r-3); }
+.step-tile:hover { background: var(--row-hover); }
+.step-rail { flex-shrink: 0; width: 10px; display: flex; flex-direction: column; align-items: center; position: relative; }
+.step-dot { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--surface-4);
+  box-shadow: inset 0 0 0 1px var(--stroke); margin-top: 10px; flex-shrink: 0; position: relative; z-index: 1; }
+/* Line bridges this tile's bottom into the next tile's top → continuous rail. */
+.step-line { position: absolute; top: 18px; bottom: -10px; left: 50%; width: 1px;
+  transform: translateX(-50%); background: var(--stroke-soft); }
+.step-tile.is-omitted .step-dot { opacity: 0.5; }
+.step-tile-body { flex: 1; min-width: 0; padding: 8px 0 10px; display: flex; flex-direction: column; gap: 3px; }
+.step-stamp { display: flex; align-items: baseline; gap: var(--s-3); font-size: var(--fs-11); color: var(--ink-lo); line-height: 1.2; }
+.step-stamp-num { color: var(--ink-mid); font-weight: 500; font-variant-numeric: tabular-nums; }
+.step-stamp-div { color: var(--ink-lo); opacity: 0.6; }
+.step-stamp-action { color: var(--ink-mid); }
+.step-target { font-size: var(--fs-13); color: var(--ink-hi); font-weight: 600; line-height: 1.35;
+  letter-spacing: -0.005em; word-break: break-word; cursor: text; }
+.step-target.step-omitted { text-decoration: line-through; color: var(--ink-lo); cursor: default; font-weight: 500; }
+.step-meta { font-size: var(--fs-11); color: var(--ink-lo); line-height: 1.3; word-break: break-all; }
+.step-text-edit { width: 100%; background: var(--surface-3); border: 0; box-shadow: inset 0 0 0 1px var(--stroke-hi);
+  border-radius: var(--r-2); padding: 3px 6px; color: var(--ink-hi); font-size: var(--fs-13); font-family: inherit; }
+.step-text-edit:focus { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
+.step-tile-actions { position: absolute; top: 6px; right: 4px; display: inline-flex; gap: 2px; opacity: 0; transition: opacity 0.1s; }
+.step-tile:hover .step-tile-actions, .step-tile.is-omitted .step-tile-actions { opacity: 1; }
+.step-act-btn { background: transparent; color: var(--ink-lo); border: 0; border-radius: var(--r-2);
+  padding: 1px 6px; font-size: var(--fs-11); line-height: 1.3; }
+.step-act-btn:hover { color: var(--ink-hi); background: var(--surface-4); }
 
-/* Preview-spec modal (Spike 8 / 9d): same backdrop conventions as the Export
-   chooser. Read-only syntax-highlighted .ts, redaction-count chip, copy. */
-.preview-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.55);
-  display: flex; align-items: center; justify-content: center; z-index: 1200; padding: 24px; }
-.preview-dialog { background: var(--bg-2); border: 1px solid var(--border-strong);
-  border-radius: 10px; box-shadow: 0 20px 60px rgba(0,0,0,0.65);
+/* Preview-spec modal (Spike 8 / 9d). */
+.preview-backdrop { position: fixed; inset: 0; background: oklch(0 0 0 / 0.55);
+  display: flex; align-items: center; justify-content: center; z-index: 1200; padding: var(--s-9); }
+.preview-dialog { background: var(--surface-1); border: 1px solid var(--stroke-hi);
+  border-radius: var(--r-5); box-shadow: var(--shadow-4);
   width: min(880px, 100%); max-height: 85vh; display: flex; flex-direction: column;
-  color: var(--text); overflow: hidden; }
-.preview-head { display: flex; align-items: center; gap: 10px;
-  padding: 12px 16px; border-bottom: 1px solid var(--border); }
-.preview-title { font-size: 13px; font-weight: 600; flex: 1; }
-.preview-body { padding: 14px 16px; overflow-y: auto; min-height: 0; flex: 1;
-  display: flex; flex-direction: column; gap: 12px; }
-.preview-body.preview-loading { color: var(--text-3); font-style: italic; }
-.preview-meta { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  color: var(--ink); overflow: hidden; }
+.preview-head { display: flex; align-items: center; gap: var(--s-5);
+  padding: var(--s-6) var(--s-7); border-bottom: 1px solid var(--stroke); }
+.preview-title { font-size: var(--fs-13); font-weight: 600; color: var(--ink-hi); flex: 1; }
+.preview-body { padding: var(--s-6) var(--s-7); overflow-y: auto; min-height: 0; flex: 1;
+  display: flex; flex-direction: column; gap: var(--s-6); }
+.preview-body.preview-loading { color: var(--ink-lo); font-style: italic; }
+.preview-meta { display: flex; align-items: center; gap: var(--s-6); flex-wrap: wrap; }
 .preview-spacer { flex: 1; }
-.preview-error { color: var(--danger); padding: 8px 0; }
-.preview-foot-hint { color: var(--text-3); font-size: 11px; }
-.preview-code { background: #161616; border: 1px solid var(--border);
-  border-radius: 6px; padding: 12px 14px; overflow: auto;
-  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
-  font-size: 12px; line-height: 1.55; color: var(--text);
+.preview-error { color: var(--danger); padding: var(--s-4) 0; }
+.preview-foot-hint { color: var(--ink-lo); font-size: var(--fs-11); }
+.preview-code { background: var(--surface-0); border: 1px solid var(--stroke);
+  border-radius: var(--r-3); padding: var(--s-6) var(--s-6); overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-12); line-height: 1.55; color: var(--ink);
   white-space: pre; }
 .preview-code-inner { display: block; }
-.tok-comment { color: #6a9955; font-style: italic; }
-.tok-string { color: #ce9178; }
+.tok-comment { color: var(--success); font-style: italic; }
+.tok-string { color: var(--warning); }
 .tok-keyword { color: var(--accent); }
+.preview-redact-wrap { display: inline-flex; flex-direction: column; gap: var(--s-3); }
+.preview-redact-chip { background: var(--accent-tint); color: var(--ink);
+  border: 1px solid var(--accent); border-radius: var(--r-pill);
+  padding: 4px 12px; font-size: var(--fs-12); font-weight: 500; }
+.preview-redact-chip:hover { background: var(--accent); color: var(--accent-ink); }
+.preview-redact-chip.is-open { background: var(--accent); color: var(--accent-ink); }
+.preview-redact-chip.is-empty { background: var(--surface-3); border-color: var(--stroke);
+  color: var(--ink-mid); cursor: default; }
+.preview-redact-chip.is-empty:hover { background: var(--surface-3); color: var(--ink-mid); }
+.preview-redact-list { list-style: none; padding: var(--s-4) var(--s-6);
+  background: var(--surface-3); border: 1px solid var(--stroke); border-radius: var(--r-3);
+  font-size: var(--fs-12);
+  color: var(--ink-mid); display: flex; flex-direction: column; gap: 4px; }
 
-/* Redaction-count chip: clickable when N > 0, expanding to the env-var list.
-   Accent-blue pill on dark background, matches the Figma-blue UI elsewhere. */
-.preview-redact-wrap { display: inline-flex; flex-direction: column; gap: 6px; }
-.preview-redact-chip { background: var(--accent-dim); color: var(--text);
-  border: 1px solid var(--accent); border-radius: 999px;
-  padding: 4px 12px; font-size: 12px; font-weight: 500; }
-.preview-redact-chip:hover { background: var(--accent); color: #fff; }
-.preview-redact-chip.is-open { background: var(--accent); color: #fff; }
-.preview-redact-chip.is-empty { background: var(--bg-3); border-color: var(--border);
-  color: var(--text-2); cursor: default; }
-.preview-redact-chip.is-empty:hover { background: var(--bg-3); color: var(--text-2); }
-.preview-redact-list { list-style: none; padding: 8px 12px;
-  background: var(--bg-3); border: 1px solid var(--border); border-radius: 6px;
-  font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-size: 12px;
-  color: var(--text-2); display: flex; flex-direction: column; gap: 4px; }
-
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--bg); }
-::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+/* Scrollbars + focus ring come from base.css (DesignOS primitives). */
