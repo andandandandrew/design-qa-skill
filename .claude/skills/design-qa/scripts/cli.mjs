@@ -145,6 +145,32 @@ async function listLiveSessions(root) {
   return live;
 }
 
+// Resolve a `--session` value to a session directory. Accepts an absolute path,
+// an exact dir basename (the timestamped form, e.g. 20260529-094156-friday-1),
+// or the bare session name (e.g. friday-1) — the same name `start` was given.
+// Bare names match any dir whose basename is `<timestamp>-<name>`; the most
+// recently created match wins, mirroring how a bare `end` picks the active one.
+async function resolveSessionDir(root, value) {
+  if (path.isAbsolute(value)) return value;
+  const exact = path.join(root, value);
+  try { if ((await fsp.stat(exact)).isDirectory()) return exact; } catch {}
+
+  let entries;
+  try { entries = await fsp.readdir(root, { withFileTypes: true }); }
+  catch { return exact; }
+  const matches = [];
+  for (const ent of entries) {
+    if (!ent.isDirectory()) continue;
+    if (ent.name === value || ent.name.endsWith(`-${value}`)) {
+      const dir = path.join(root, ent.name);
+      try { matches.push({ dir, ctimeMs: (await fsp.stat(dir)).ctimeMs }); } catch {}
+    }
+  }
+  if (matches.length === 0) return exact; // let downstream produce a clear error
+  matches.sort((a, b) => b.ctimeMs - a.ctimeMs);
+  return matches[0].dir;
+}
+
 async function cmdEnd(opts) {
   const root = opts.root;
   if (!root) die('--root required');
@@ -152,9 +178,7 @@ async function cmdEnd(opts) {
   let sessionDir;
   if (opts.session) {
     if (typeof opts.session !== 'string') die('--session needs a value');
-    sessionDir = path.isAbsolute(opts.session)
-      ? opts.session
-      : path.join(root, opts.session);
+    sessionDir = await resolveSessionDir(root, opts.session);
   } else {
     const live = await listLiveSessions(root);
     if (live.length === 0) die(`no live sessions under ${root}`);
