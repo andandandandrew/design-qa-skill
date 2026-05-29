@@ -175,13 +175,14 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: 0; backg
 .cc-card { position: absolute; z-index: 30; transform: translate(28px, -24px);
   background: var(--surface-1); color: var(--ink-hi); border-radius: var(--r-5);
   box-shadow: var(--shadow-4), inset 0 0 0 1px var(--stroke-soft); }
-.cc-card.cc-read { width: 300px; padding: var(--s-5); display: flex; flex-direction: column; gap: var(--s-3); }
+.cc-card.cc-read { width: 300px; }
 .cc-card.cc-edit { width: 320px; }
-.cc-head { display: flex; align-items: baseline; gap: var(--s-3); }
+/* Read card: header (author/time + ··· · resolve · close), divider, body. */
+.cc-read-head { display: flex; align-items: center; gap: var(--s-2); padding: 10px 12px; }
+.cc-read-meta { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: var(--s-3); }
+.cc-read-main { padding: 12px; display: flex; flex-direction: column; gap: var(--s-3); }
 .cc-author { font-size: var(--fs-13); font-weight: 600; color: var(--ink-hi); }
-.cc-time { font-size: var(--fs-12); color: var(--ink-lo); flex: 1; }
-.cc-resolved-badge { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-10);
-  color: var(--ink-lo); background: var(--surface-2); padding: 2px 6px 2px 4px; border-radius: var(--r-1); }
+.cc-time { font-size: var(--fs-12); color: var(--ink-lo); }
 .cc-body { font-size: var(--fs-13); color: var(--ink-hi); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
 .cc-card.cc-read.resolved .cc-body { color: var(--ink-lo); }
 .cc-tag-row { display: flex; align-items: center; }
@@ -189,6 +190,8 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: 0; backg
   display: inline-flex; align-items: center; justify-content: center; color: var(--ink-mid); background: transparent; }
 .cc-icon:hover { background: var(--surface-3); color: var(--ink-hi); }
 .cc-icon.danger:hover { background: var(--danger-tint); color: var(--danger); }
+.cc-resolve.on { background: var(--success); color: var(--accent-ink); }
+.cc-resolve.on:hover { background: var(--success); filter: brightness(1.08); }
 .cc-edit-head { display: flex; align-items: center; gap: var(--s-2); padding: 10px 12px; }
 .cc-edit-title { font-size: var(--fs-13); font-weight: 600; color: var(--ink-hi); flex: 1; }
 .cc-divider { height: 1px; background: var(--stroke-soft); }

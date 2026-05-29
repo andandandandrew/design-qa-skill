@@ -1,6 +1,7 @@
 import { el } from '../lib/dom.mjs';
 import { showToast } from './toast.mjs';
 import { icon } from './icons.mjs';
+import { openMenu } from './menu.mjs';
 import { renderStepsTab } from './steps.mjs';
 
 /**
@@ -69,9 +70,20 @@ function buildCard(ctx, p, view) {
   if (p.category) bodyKids.push(buildCategoryTag(ctx, p.category));
   const body = el('div', { class: 'comment-body' }, bodyKids);
 
-  // Top-right action: resolve check only (quick triage). Category, edit, and
-  // delete live on the canvas card — the sidebar is purely a fast index.
+  // Top-right actions: ⋯ (delete) + resolve check (quick triage). Category +
+  // edit live on the canvas card; the sidebar stays a fast index.
   const actions = [];
+  if (options.canDelete) {
+    const moreBtn = el('button', { class: 'comment-act', title: 'More', 'aria-haspopup': 'true',
+      onclick: (e) => {
+        e.stopPropagation();
+        openMenu(moreBtn, [
+          { label: 'Delete comment', icon: 'trash', danger: true, onClick: () => ctx.store.deletePin({ pinId: p.id }) },
+        ], { align: 'right', width: 180 });
+      } });
+    moreBtn.append(icon('more', 15));
+    actions.push(moreBtn);
+  }
   if (options.canResolve) {
     const resolveBtn = el('button', {
       class: `resolve-btn ${resolved ? 'on' : ''}`,

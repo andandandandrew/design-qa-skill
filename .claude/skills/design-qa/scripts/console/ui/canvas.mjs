@@ -182,33 +182,43 @@ function buildReadCard(ctx, p) {
   const resolved = p.status === 'resolved';
   const meta = p.category ? ctx.CATEGORY_META[p.category] : null;
 
+  // Header action cluster (DesignOS FxCommentEdit header): ··· (Edit/Delete) ·
+  // resolve toggle · close. The ··· only appears if it would hold something.
+  const actions = [];
   const menuItems = [
     options.canEditNotes ? { label: 'Edit comment', onClick: () => ctx.setState({ editing: true }) } : null,
-    options.canResolve ? {
-      label: resolved ? 'Mark as open' : 'Mark as resolved', icon: 'check',
-      onClick: () => toggleResolve(ctx, p, resolved),
-    } : null,
-    (options.canEditNotes || options.canResolve) && options.canDelete ? { separator: true } : null,
     options.canDelete ? {
       label: 'Delete comment', icon: 'trash', danger: true,
       onClick: () => ctx.store.deletePin({ pinId: p.id }).then(() => ctx.setState({ activePinId: null, editing: false })),
     } : null,
   ].filter(Boolean);
-
-  // No actions on a read-only surface (the exported artifact) → no ··· button.
-  let moreBtn = null;
   if (menuItems.length) {
-    moreBtn = el('button', { class: 'cc-icon', title: 'More', 'aria-haspopup': 'true' });
+    const moreBtn = el('button', { class: 'cc-icon', title: 'More', 'aria-haspopup': 'true' });
     moreBtn.append(icon('more', 15));
-    moreBtn.addEventListener('click', (e) => { e.stopPropagation(); openMenu(moreBtn, menuItems, { align: 'right', width: 200 }); });
+    moreBtn.addEventListener('click', (e) => { e.stopPropagation(); openMenu(moreBtn, menuItems, { align: 'right', width: 180 }); });
+    actions.push(moreBtn);
   }
+  if (options.canResolve) {
+    const resolveBtn = el('button', {
+      class: `cc-icon cc-resolve ${resolved ? 'on' : ''}`,
+      title: resolved ? 'Mark as open' : 'Mark as resolved', 'aria-pressed': String(resolved),
+      onclick: (e) => { e.stopPropagation(); toggleResolve(ctx, p, resolved); },
+    });
+    resolveBtn.append(icon('check', 13, 2.25));
+    actions.push(resolveBtn);
+  }
+  const closeBtn = el('button', { class: 'cc-icon', title: 'Close',
+    onclick: (e) => { e.stopPropagation(); ctx.setState({ activePinId: null, editing: false }); } });
+  closeBtn.append(icon('close', 14));
+  actions.push(closeBtn);
 
-  const head = el('div', { class: 'cc-head' }, [
-    el('span', { class: 'cc-author' }, p.author || 'Anonymous'),
-    el('span', { class: 'cc-time', title: p.createdAt || '' }, relTime(p.createdAt)),
-    resolved ? el('span', { class: 'cc-resolved-badge' }, [icon('check', 9, 2.5), 'Resolved']) : null,
-    moreBtn,
-  ].filter(Boolean));
+  const head = el('div', { class: 'cc-read-head' }, [
+    el('div', { class: 'cc-read-meta' }, [
+      el('span', { class: 'cc-author' }, p.author || 'Anonymous'),
+      el('span', { class: 'cc-time', title: p.createdAt || '' }, relTime(p.createdAt)),
+    ]),
+    ...actions,
+  ]);
 
   const body = el('div', { class: 'cc-body' }, p.note || '(no comment)');
   const tagRow = meta
@@ -217,9 +227,10 @@ function buildReadCard(ctx, p) {
         meta.label,
       ]))
     : null;
+  const main = el('div', { class: 'cc-read-main' }, [body, tagRow].filter(Boolean));
 
   return el('div', { class: `cc-card cc-read ${resolved ? 'resolved' : ''}`, dataset: { id: p.id } },
-    [head, body, tagRow].filter(Boolean));
+    [head, el('div', { class: 'cc-divider' }), main]);
 }
 
 function buildEditCard(ctx, p) {
