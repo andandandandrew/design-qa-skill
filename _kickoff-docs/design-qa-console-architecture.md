@@ -67,6 +67,37 @@ revisit-URL behavior to fix, because re-access is always via the console.
 screen comes into being (manual upload also creates screens), and sealing is now tied to
 explicit Done + view-change freeze rather than only navigation/`capture` transitions.
 
+### "Save feedback" / Done — the explicit seal (BUILT 2026-05-27)
+
+The "Done" button above got a concrete shape, so a designer never has to navigate away
+just to seal a screen:
+
+- **A "Save" button in the overlay toolbar, alongside "+ New screen."** It seals the
+  current screen (fresh full-page screenshot + `sealView` + %-at-rest normalization) and
+  pushes it to the console as an editable screen — reusing the seal half of the existing
+  `startNewView` machinery (the console live-refreshes via SSE on persist). Shipped as the
+  `__designQA_sealCurrentView` binding (`capture.mjs`) — the seal half *without* opening a
+  new view.
+- **It does NOT end the session.** The browser stays live; the designer keeps working
+  (navigate elsewhere, start new screens). It is per-screen, not per-session.
+- **A confirmation makes the one-way nature explicit.** Worth knowing: **native
+  `window.confirm`/`alert`/`prompt` are auto-dismissed by Playwright** (no dialog handler),
+  so they're unusable inside the capture overlay. The confirm is therefore an **inline
+  confirm bar rendered in the overlay's shadow DOM** ("Lock this screen? You won't be able
+  to add or edit it here — finish in the console."), dismissable via Cancel / Esc / another
+  action. (Native dialogs *do* work in the console — it's the user's normal browser — which
+  is why manual-upload naming below can use `window.prompt`.)
+- **Closing the browser seals too (sibling fix, shipped).** An abrupt browser close used to
+  preserve pins but leave the active screen *unsealed* (locked/read-only in the console).
+  Now `capture.onClose` awaits `finalizeActiveViews()` (rewritten to seal from the *store*,
+  not live pages, so it works after the browser is gone) before exiting, so a close commits
+  cleanly. Build-check held: `findViewByUrl` skips sealed views (`session.mjs:135`), so the
+  next pin after a Save starts a fresh screen rather than reattaching.
+- **Overlay UI rework (user-driven, same change):** the resting toolbar is now an
+  always-visible labeled **verb bar** (Comment / Save / New + a chevron); the chevron now
+  only expands/collapses the Screens/Pins *lists*. Previously the Save/New actions were
+  buried inside the expanded panel.
+
 ---
 
 ## The two surfaces
@@ -130,6 +161,17 @@ functional `captureMode`:
 non-browsable environments, or when the browser path is unavailable (e.g., out of tokens).
 React Native defaults to `manual`; web defaults to `browser` with manual on standby.
 
+**Manual upload — BUILT (Phase 5, 2026-05-27).** The console's sidebar **+ Add screen**
+(enabled only when served by the live session server) picks an image, asks for a name via
+`window.prompt`, reads the image's intrinsic dimensions client-side, and POSTs the raw
+bytes to `POST /api/upload`. The server's sole writer (`SessionStore.addManualView`) writes
+the file into the session's `screenshots/` dir and creates a `source:'manual'` view
+(`url:null`, sealed at birth, viewport from the client dims), which is immediately
+console-editable (never browser-locked). Because the canvas's placement math is already
+`%`-of-rendered-image (Spike B `imagePxToPct`), a manual screen reuses the exact
+sealed-screen pin path (`createPin` → `createPinPct`) with **no canvas changes** — proving
+the "%-at-rest unifies both paths" decision in practice.
+
 ---
 
 ## Data model
@@ -151,6 +193,62 @@ as the default.)
 
 **Screen gains:** `source: 'browser' | 'manual'`, and for manual screens the uploaded image
 becomes its screenshot.
+
+---
+
+## Comment-card layout & resolve UX *(BUILT 2026-05-28)*
+
+The console's right pane (and, by inheritance, the exported artifact's right pane) was
+reshaped to mirror Figma's comment-card pattern. Reference screenshots live in
+`_qa/figma-comment-ui/Screenshot 2026-05-28 at 9.13.57 AM.png` (card) and
+`9.14.15 AM.png` (toast).
+
+**Card layout** (`scripts/console/ui/comments.mjs`):
+
+- **Top-left:** deterministic-color circle with the author's initial (`A`, `J`, `?` for
+  null author). Color derives from a djb2-ish hash of the name so a given author looks
+  the same across sessions.
+- **Top-right:** small category dropdown (the `⋯`-overflow slot Figma uses for an
+  ellipsis menu — repurposed here as the most useful overflow) followed by a circular
+  **Mark as resolved** check button. The category control fades in on hover (or stays
+  visible when a category is set) so unset cards read clean.
+- **Breadcrumb line:** `#<index> · <screen name>`.
+- **Byline line:** `<author> · <relative time>` (`5m ago` / `2h ago` / `3d ago` /
+  `May 3` falling back to a localized short date).
+- **Note body:** click to edit (in-place textarea, commit on blur or Cmd/Ctrl+Enter,
+  Esc cancels — unchanged from before).
+
+**Resolve UX** (`scripts/console/ui/toast.mjs`):
+
+- Clicking the check button flips the pin to `status: 'resolved'` and shows a
+  **bottom-centered toast** "Comment resolved" with an **Undo** button and a close
+  `×`. Auto-dismisses in 6s; paused while hovered.
+- **No completion-note prompt** (originally there as a `window.prompt`; removed per
+  user feedback because the friction outweighed the value). The `pin.resolvedNote`
+  field stays in the schema as a back-compat tombstone but is never set anymore.
+- Clicking the filled check on a resolved comment silently unresolves (no toast —
+  the user's intent is unambiguous when they click an already-on affordance).
+
+**Cross-session editing — lookback is fully writable.** The original Phase-6 design
+had `?session=<basename>` open archived sessions read-only with a LocalStorage resolve
+layer; user feedback (2026-05-28) reshaped this so an archived session opened from the
+switcher exposes the **same** affordances as the live session (add pin, edit note,
+move, delete, resolve, manual upload). The capture-overlay-locks-the-active-view rule
+only applies to the live owned session's currently-capturing screen — archived
+sessions have no unsealed views, so all are console-editable. Server-side, the same
+`/api/mutate` and `/api/upload` endpoints accept `?id=<basename>` and route to a
+lazily-loaded `SessionStore` cached per basename. **The writer rule was generalized**:
+"one writer per session AT A TIME" replaces the original "one writer per session." An
+ended session has no other writer, so the current live server safely authors edits
+into it. Two concurrent editors of the same archived session would last-write-wins —
+called out as a v1 limitation; the realistic scenario (two live session-servers in the
+same dir both editing the same third archived session) is rare. See
+[[architecture-decisions]].
+
+The only visual cue distinguishing live from lookback in the topbar is the badge: a
+pulsing `● Live` while a capture browser owns an unsealed screen vs. a static
+`⌛ Archived` when the open session is sealed. Everything else — switcher, panes,
+gestures — is identical.
 
 ---
 
@@ -192,11 +290,82 @@ spec did not contemplate.
 **Supersedes** the v1 behavior of building the artifact automatically at `end`. Export is
 now a deliberate, versioned action triggered from the console (and/or terminal).
 
+**Directory export (decided 2026-05-27, post-demo).** Export a small **directory**, not
+just a single `artifact.html`: the HTML + `session.json` (+ `screenshots/`) + the recorded
+Playwright script (see Spike 8). Opening the directory locally unlocks the **full
+console-style interactivity** — filter, search categories, resolve/check-off — because the
+data and assets live beside the HTML. A single inlined file stays a convenience fallback.
+The in-progress artifact-parity build (shared-renderer, LocalStorage resolve) is
+forward-compatible: swapping resolve persistence to the directory's sidecar JSON later is a
+store-adapter change. See `design-qa-spikes.md` Spike 7 (revised) for detail.
+
+**Phase 7 BUILT (commit `abad681`, 2026-05-28).** Versioned export ships as a user-facing
+**Share** action (button relabeled from "Export" at user request — same underlying file
+names). Two pieces:
+
+1. **User-facing "Share" flow.** Clicking Share opens a two-option chooser modal:
+   - *Share as single file* → one self-contained `artifact-YYYYMMDD-vN.html`.
+   - *Share as bundle (zip)* → `artifact-YYYYMMDD-vN.zip` containing `artifact.html` +
+     `session.json` + `screenshots/` + a one-line `README.md` noting the empty
+     Playwright-script slot (Spike 8).
+
+   Cancel | Next; Next is focused so Enter confirms. On Next the console fetches
+   `POST /api/export?kind=single|bundle` (which returns BYTES with `Content-Disposition`,
+   not paths) and hands the blob to **`window.showSaveFilePicker`** on Chromium — a real
+   native OS save dialog with a kind-appropriate type filter. Safari/Firefox fall back to
+   `<a download>` (browser default folder). Picker cancellation (`AbortError`) is silent.
+   Toast on success.
+
+   **Load-bearing UX decision (do not regress):** export-style actions present an OS save
+   dialog, not raw paths. The original Phase-7 cut showed two `<sessionDir>/...` paths in
+   a modal with Copy buttons; the user rejected it as engineer-think ("I don't understand
+   how to use the copy function"). Any future Share/Export/Download surface must follow
+   the same pattern. The pivot is recorded in
+   `~/.claude/projects/.../memory/architecture_decisions.md`.
+
+2. **Silent project archive.** `exportSession({ sessionDir, session })` in
+   `artifact/build.mjs` continues to write a local copy on EVERY share action regardless
+   of the chosen kind:
+   - `<sessionDir>/artifact-YYYYMMDD-vN.html` — versioned self-contained file. `vN` scans
+     same-date `artifact-*-v*.html` siblings and takes max+1.
+   - `<sessionDir>/exports/<YYYYMMDD-HHMMSS>-vN/` — the directory bundle (artifact.html +
+     session.json + screenshots/ + README.md). `vN` matches the versioned file.
+
+   The bundle's `README.md` is intentionally minimal ("a future Playwright-script slot
+   (Spike 8) not yet written") so the shape is documented before the script lands.
+
+   For the user, this archive is invisible — only the save-dialog destination is surfaced.
+   The local copies exist for project record and to make the Spike 8 / sidecar-JSON
+   store-adapter swap a small change later.
+
+   The bundle ZIP is built on-the-fly with the OS `zip` command (`spawn('zip',
+   ['-r','-X','-q','-','.'], { cwd: bundleDir })`, stdout streamed to a buffer). No
+   project dependency added; relies on Info-ZIP being present on macOS/Linux.
+
+**Gated to the owned-live session this pass.** Lookback (`?session=<basename>`) keeps the
+Share button disabled with the tooltip "Switch to the live session to share." Sibling
+export from lookback is a TODO — would route through the same `archivedStores` cache
+pattern that cross-session mutate already uses (see writer-rule generalization).
+
 **Two layers of "resolve":**
 
 - **Designer-side** resolve/check-off in the console → persists to `session.json`.
 - **Engineer-side** resolve in the distributed artifact → persists separately (the
   unresolved Spike 7 question: sidecar JSON vs. LocalStorage + re-export). Still open.
+
+**Shared-renderer artifact parity — BUILT (2026-05-27).** The exported `artifact.html` no
+longer has its own diverging renderer: it reuses the console's render modules
+(`console/core.mjs` + `ui/*` + `lib/*`). `core.mjs`'s `createApp({store, mounts, options})`
+owns state/render/filter-sort/selection; affordances are gated by `options`
+(`canPlacePins` / `canEditNotes` / `canResolve` / `canDelete`). The console enables all of
+them; the artifact enables `{ canResolve: true }` only — engineers view + filter + sort +
+see categories + resolve (with an optional completion note), but cannot add/move/delete/
+edit-note (those stay designer-side). `build.mjs` inlines the module sources via an import
+map of `@dqa/*` → base64 `data:` URLs (so the graph loads from `file://`), embeds the
+session with screenshots as `data:` URLs, and backs it with an `ArtifactStore` whose
+`resolvePin` persists to **LocalStorage keyed by session id** (the still-open engineer-side
+layer above). That choice is forward-compatible with directory export: LocalStorage →
+sidecar JSON is a store-adapter swap.
 
 ---
 
@@ -251,9 +420,92 @@ disposable). Security: bind to localhost only.
 
 ### Spike 7 (evolved) — Engineer-side completion persistence
 
-Unchanged in substance: sidecar JSON vs. LocalStorage + re-export for the distributed
-artifact. Now clearly *separate* from designer-side resolve (which persists to
-`session.json` via the console).
+**Directory export SHIPPED (Phase 7, commit `abad681`, 2026-05-28)** as a `.zip` bundle —
+`artifact.html` + `session.json` + `screenshots/` + a README noting the empty
+Playwright-script slot (Spike 8). The sidecar-JSON resolve question is still **open**: the
+shipped artifact's `ArtifactStore.resolvePin` still writes to **LocalStorage** keyed by
+session id. Moving engineer-side resolve to the bundle's sidecar `session.json` is the
+store-adapter change the design was built to allow — not yet done.
+
+### Further spikes (post-demo, 2026-05-27) — backlog, not scheduled
+
+Captured after a principal-engineer demo; full write-ups in `design-qa-spikes.md`. Not to
+be built now — recorded so the build can pick them up later.
+
+- **Spike 8 — Interaction recording & replay.** Record the path the QA person took to reach
+  a state and emit it *both* as an executable Playwright script *and* a human-followable
+  step list, so an engineer can run it or follow it. Hard part: auth/preconditions in a
+  portable script. **Has a reserved slot in the Phase-7 bundle** (the README explicitly
+  notes "a future Playwright-script slot (Spike 8) not yet written") — when this lands,
+  the script lives alongside `artifact.html` in the zip. Still requires research + UX
+  design; see `design-qa-spikes.md` §Spike 8 for the open questions.
+- **Spike 9 — Post-change regression diff (research only).** Given a recorded path + the
+  resolved/open comments, re-run after code changes and diff what changed vs. what was
+  commented/resolved. Explicitly assess approaches (visual / structural / LLM-judged) before
+  committing. Depends on Spike 8.
+- **Spike 10 — Compare-to-Figma (LLM-driven).** For reviewers who sense something's off but
+  can't name it: link a Figma node URL per screen (manual), pull the frame via Figma Console
+  MCP + desktop bridge, and have an LLM compare it to the screenshot/state to suggest or
+  generate pin descriptions (human-accepted, never silent auto-pinning).
+
+---
+
+## Phase 8 — UI consistency & Figma-parity *(deferred, 2026-05-28)*
+
+Captured after the comment-card and toast/Undo redesign (which were folded into Phase 6
+as in-flight feedback). Phase 8 is the **dedicated UI consistency phase** that runs
+**after the functional phases finish** (Phase 7 export remainder, any further functional
+work), so aesthetic changes don't muddy diffs that should read as functional. Reference
+screenshots live in `_qa/figma-comment-ui/`. Nothing in this phase is built yet.
+
+**Goals**
+
+1. **Sidebar parity with Figma.** The right comments pane was reshaped to match Figma's
+   comment-card layout (avatar / breadcrumb / byline / note + circular resolve button +
+   bottom toast w/ Undo); the rest of the chrome still feels generic. Phase 8 brings the
+   left (Screens) sidebar and the right (Comments) sidebar into the same family — see
+   `_qa/figma-comment-ui/Screenshot 2026-05-28 at 9.21.01 AM.png` (left open),
+   `Screenshot 2026-05-28 at 9.21.06 AM.png` (left collapsed pill), and `9.21.17 AM.png`
+   (right pane).
+   - **Collapsible panes** (both sides). When collapsed, the left side becomes a small
+     pill anchored top-left with the project name and an expand chevron, giving the canvas
+     full width. The right side likewise collapses to a thin gutter.
+   - **Section-headed left sidebar.** Project name + dropdown at the top with a small
+     collapse-toggle button on the same row; "Pages" / "Layers" section headers; flat
+     hierarchical list of screens with visual grouping (no hard borders between adjacent
+     screens — only between section groups). The Phase-2 sidebar today renders one bordered
+     card per screen, which reads heavier than Figma's flat list.
+   - **Search + filter + overflow in the right sidebar.** Add a comment-search box, a
+     filter glyph button, and an overflow `⋯` menu (sort / status filter live here) at the
+     top of the comments pane. The current filter selects move into that menu.
+   - **Flatter comment list.** Drop the per-card border + background; let the avatar +
+     metadata + note stack stand on its own; rely on hover for subtle highlight and the
+     active state for the selected pin.
+
+2. **Capture overlay (browser inspector) ↔ console visual parity.** The in-page overlay
+   (`overlay/inject.js`) and the console currently have their own visual languages built
+   from the same tokens but applied differently. Phase 8 unifies them so a designer
+   switching between the live capture browser and the console doesn't feel two products.
+   - Share a token file across both surfaces (the overlay can't `<link>` the console's CSS
+     because it lives in shadow-DOM inside the captured page, but it can copy the same
+     custom-property set into its shadow root).
+   - Align the verb bar, composer pill, marker, and inspector list to the console's
+     Figma-style language: same avatar/initial circles, same byline format, same
+     resolve-button shape.
+
+**Why now (i.e., why not before Phase 7)**
+
+Phase 7 (versioned + directory export) only needs the existing comment renderer — the
+shared modules already power the artifact, so any Phase-8 visual change to those modules
+flows into the export for free. Doing visual parity AFTER Phase 7 lets us ship the export
+artifact at the new visual baseline in one go rather than re-exporting after polish.
+
+**Out of scope for Phase 8 itself**
+
+The capture-overlay rewrite, if it's larger than restyling, can split into its own
+follow-on. Functional changes (new gestures, new authoring affordances) don't belong here —
+this phase is *pure visual + interaction-shape parity*. If something starts to require new
+data fields or new endpoints, it belongs in a different phase.
 
 ---
 

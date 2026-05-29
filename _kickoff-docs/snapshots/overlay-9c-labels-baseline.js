@@ -41,12 +41,6 @@
     // across all views; `startedAtMs` is the Node-side wall clock at Mark-start
     // (popover computes elapsed from it).
     recorder: { active: false, count: 0, startedAtMs: null, redactionCount: 0 },
-    // Cross-nav restore intent for the recording popover. The boot path may
-    // request "open the popover if recording is active" before the Node→shadow
-    // state push has landed (active is still false on the fresh page). When
-    // the push arrives with active=true, the setter re-checks this flag and
-    // opens the popover then. Cleared on first successful open.
-    pendingPopoverRestore: false,
   };
 
   const TEMP_PREFIX = '__temp_';
@@ -129,22 +123,19 @@
        out of view when the verb bar grows (e.g. when Mark-start becomes the
        wider Recording · N chip). */
     .panel-header .icon-btn { flex-shrink: 0; }
-    /* Done is the session-level wrap-up (9f, relabelled from "Save") — pushed to
-       the right edge of the verb bar (just before the chevron) and rendered as a
-       SOLID accent-filled CTA at all times (text white, fill blue). 9c-feedback-2:
-       the opaque variant — fill takes the color that the text used to be. The
-       confirm-bar below the verb bar is the primary signal that Done was clicked;
-       the chip darkens slightly on hover/active but never loses its solid look. */
-    .tool-btn.done-cta {
+    /* Save is the primary commit action — pushed to the right edge of the verb
+       bar (just before the chevron) and treated as a typography-only CTA in
+       the accent color, no icon. Active state keeps the existing solid-accent
+       background used while the inline confirm bar is open. */
+    .tool-btn.save-cta {
       margin-left: auto;
-      background: var(--accent);
-      color: #ffffff;
+      color: var(--accent);
       font-weight: 600;
     }
-    .tool-btn.done-cta:hover { background: var(--accent-hover); color: #ffffff; }
-    .tool-btn.done-cta.active,
-    .tool-btn.done-cta.active:hover { background: var(--accent-hover); color: #ffffff; }
-    /* Always-visible labeled verbs (Comment / New / Record / Done). */
+    .tool-btn.save-cta:hover { background: var(--accent-dim); color: var(--accent); }
+    .tool-btn.save-cta.active,
+    .tool-btn.save-cta.active:hover { background: var(--accent); color: #ffffff; }
+    /* Always-visible labeled verbs (Comment / Save / New). */
     .tool-btn {
       all: unset; cursor: pointer;
       display: inline-flex; align-items: center; gap: 5px;
@@ -170,7 +161,7 @@
     .icon-btn.active:hover { background: var(--accent-hover); }
     .icon-btn svg { width: 14px; height: 14px; display: block; }
 
-    /* Inline confirm for the one-way Done (native confirm() can't be used —
+    /* Inline confirm for the one-way Save (native confirm() can't be used —
        Playwright auto-dismisses it). Shows below the verb bar in either state. */
     .confirm-bar { padding: 9px 11px; border-bottom: 1px solid var(--border); background: var(--bg); }
     .confirm-bar[hidden] { display: none; }
@@ -479,28 +470,28 @@
   const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
   const ICON_REC = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="5"/></svg>`;
 
-  // 9c-feedback-3: Comment + New stay icon-only; Record reverts to labeled
-  // (Record at rest → Recording · N when active) so the verb-bar lockup is
-  // 3 icons + 1 labeled verb + Save CTA.
-  const ADD_LABEL = `<span class="tb-ic">${ICON_COMMENT}</span>`;
-  const CANCEL_LABEL = `<span class="tb-ic">${ICON_X}</span>`;
+  // addBtn label content (icon + word); swapped to a Cancel state in placement mode.
+  const ADD_LABEL = `<span class="tb-ic">${ICON_COMMENT}</span><span class="tb-label">Comment</span>`;
+  const CANCEL_LABEL = `<span class="tb-ic">${ICON_X}</span><span class="tb-label">Cancel</span>`;
+  // Spike 8 recorder chip — resting label shows the icon + verb; active label
+  // (rendered later in renderRecorderChip) drops the icon for a pulsing red dot.
   const REC_LABEL_RESTING = `<span class="tb-ic">${ICON_REC}</span><span class="tb-label">Record</span>`;
 
   const panel = document.createElement('div');
   panel.className = 'panel collapsed';
   panel.innerHTML = `
     <div class="panel-header">
-      <button class="tool-btn" id="addBtn" title="Drop a comment — click, then click on the page">${ADD_LABEL}</button>
-      <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span></button>
+      <button class="tool-btn" id="addBtn" title="Click, then click on the page to drop a comment">${ADD_LABEL}</button>
       <button class="tool-btn recorder-chip" id="recBtn" title="Start recording the path the engineer will replay">${REC_LABEL_RESTING}</button>
-      <button class="tool-btn done-cta" id="doneBtn" title="Finish the review — seal this screen, lock the recorded path; continue in the console">Done</button>
+      <button class="tool-btn" id="newViewBtn" title="Save this screen and start a fresh one on this URL"><span class="tb-ic">${ICON_PLUS}</span><span class="tb-label">New</span></button>
+      <button class="tool-btn save-cta" id="saveViewBtn" title="Save this screen — lock it here; finish edits in the console">Save</button>
       <button class="icon-btn" id="toggleBtn" title="Show screens & pins">${ICON_CHEVRON_DOWN}</button>
     </div>
     <div class="confirm-bar" id="confirmBar" hidden>
-      <div class="confirm-msg">Finish this review? This seals the current screen and locks the recorded path the engineer replays. You'll continue any edits in the console.</div>
+      <div class="confirm-msg">Lock this screen? You won't be able to add or edit it here — finish in the console.</div>
       <div class="confirm-actions">
-        <button class="confirm-cancel" id="doneCancelBtn">Cancel</button>
-        <button class="confirm-ok" id="doneConfirmBtn">Done</button>
+        <button class="confirm-cancel" id="saveCancelBtn">Cancel</button>
+        <button class="confirm-ok" id="saveConfirmBtn">Save</button>
       </div>
     </div>
     <div class="panel-body" id="panelBody">
@@ -1066,18 +1057,16 @@
     toast('New screen — give it a name');
   }
 
-  // "Done" (9f): the SESSION-LEVEL wrap-up — seal the current screen AND
-  // finalize-keep the recording (lock view.steps, stop the recorder appending),
-  // pressed once at the end. Between-screen moves are navigation / "New" (those
-  // auto-seal and recording keeps running); Done is the "I'm finished" gesture.
-  // It does NOT close the browser — the session stays live so the user can keep
-  // reviewing in the console; closing the browser finalizes views on its own.
-  // The one-way nature is made explicit via an INLINE confirm in the toolbar
-  // (native confirm() is auto-dismissed by Playwright, so it can't be used).
+  // "Save": seal the current screen so it becomes console-owned. Does NOT end
+  // the session — the browser stays live; placing a pin on this URL afterward
+  // auto-creates a fresh screen. The one-way nature is made explicit via an
+  // INLINE confirm in the toolbar (native confirm() is auto-dismissed by
+  // Playwright, so it can't be used here). See console-architecture lifecycle
+  // "Save feedback / Done".
 
-  function setDoneConfirm(open) {
+  function setSaveConfirm(open) {
     const bar = $('confirmBar');
-    const btn = $('doneBtn');
+    const btn = $('saveViewBtn');
     if (bar) bar.hidden = !open;
     if (btn) btn.classList.toggle('active', open);
     if (open) window.addEventListener('keydown', confirmEsc, { capture: true });
@@ -1085,33 +1074,24 @@
   }
 
   function confirmEsc(e) {
-    if (e.key === 'Escape') { e.preventDefault(); setDoneConfirm(false); }
+    if (e.key === 'Escape') { e.preventDefault(); setSaveConfirm(false); }
   }
 
-  // Gate before showing the confirm: Done is session-level, so it's available
-  // whenever there's something to finish — pins on THIS screen OR an active
-  // recording (whose path spans other screens). Nothing of either → toast.
-  function requestDone() {
+  // Gate before showing the confirm: nothing committed on this screen → toast.
+  function requestSaveCurrentScreen() {
     const realPins = STATE.pins.filter((p) => !String(p.id).startsWith(TEMP_PREFIX));
-    const hasCurrentPins = STATE.viewId && realPins.length > 0;
-    if (!hasCurrentPins && !STATE.recorder.active) {
-      toast('Add a comment or start recording before finishing');
+    if (!STATE.viewId || realPins.length === 0) {
+      toast('Add a comment before saving this screen');
       return;
     }
-    setDoneConfirm(true);
+    setSaveConfirm(true);
   }
 
-  async function performDone() {
-    setDoneConfirm(false);
-    // 1. Seal the current screen (if it carries pins or recorded steps). The
-    //    recording is still active here, so sealCurrentView preserves a
-    //    steps-only segment for a pass-through screen.
-    try { await window.__designQA_sealCurrentView({ url: location.href }); }
-    catch (e) { console.warn('design-qa: sealCurrentView failed', e); }
-    // 2. Finalize-keep the recording: locks view.steps, stops appending, rests
-    //    the chip. (This is __designQA_stopRecording's 9f meaning — NOT discard.)
-    try { await window.__designQA_stopRecording(); }
-    catch (e) { console.warn('design-qa: finalize recording failed', e); }
+  async function performSaveCurrentScreen() {
+    setSaveConfirm(false);
+    let result;
+    try { result = await window.__designQA_sealCurrentView({ url: location.href }); }
+    catch (e) { console.warn('design-qa: sealCurrentView failed', e); return; }
     // Reset local state: there's no editable view for this URL anymore. The next
     // pin's commit calls ensureView, which creates a fresh screen.
     STATE.viewId = null;
@@ -1120,7 +1100,9 @@
     renderPins();
     renderPopover();
     await refreshSession();
-    toast('Done — recording locked; continue any edits in the console');
+    if (result.ok) toast('Feedback saved — make further changes in the console');
+    else if (result.reason === 'empty') toast('Add a comment before saving this screen');
+    else toast('Nothing to save on this screen');
   }
 
   // ------- Spike 8 — Recording chip + popover --------------------------
@@ -1212,11 +1194,6 @@
 
   function openRecordingPopover() {
     if (recPopoverEl) return;
-    // Persist open state Node-side so it survives navigation. See
-    // `__designQA_setUiState` in lib/capture.mjs.
-    if (typeof window.__designQA_setUiState === 'function') {
-      window.__designQA_setUiState({ popoverOpen: true }).catch(() => {});
-    }
     recPopoverEl = document.createElement('div');
     recPopoverEl.className = 'rec-popover';
     recPopoverEl.innerHTML = `
@@ -1228,8 +1205,7 @@
       <div class="rec-popover-list"><div class="rec-popover-list-empty">Loading…</div></div>
       <div class="rec-popover-actions">
         <button class="ghost" id="recResetBtn" title="Move the start of recording to now">Reset start here</button>
-        <button class="ghost" id="recStopBtn" title="Finish recording — keep the recorded path the engineer will replay">Stop recording</button>
-        <button class="danger" id="recDiscardBtn" title="Throw away the recorded path — captured steps move to preconditions as hints">Discard</button>
+        <button class="danger" id="recStopBtn" title="Turn recording off; existing steps move to preconditions">Stop recording</button>
       </div>
     `;
     chrome.appendChild(recPopoverEl);
@@ -1251,9 +1227,6 @@
     recPopoverEl.remove();
     recPopoverEl = null;
     if (recStopwatchTimer) { clearInterval(recStopwatchTimer); recStopwatchTimer = null; }
-    if (typeof window.__designQA_setUiState === 'function') {
-      window.__designQA_setUiState({ popoverOpen: false }).catch(() => {});
-    }
   }
 
   // Node → shadow push setter, called via page.evaluate from capture.mjs.
@@ -1273,12 +1246,6 @@
       refreshRecPopoverList();
       // Active flipped to false? Close the popover (nothing to show).
       if (!STATE.recorder.active) closeRecordingPopover();
-    } else if (STATE.pendingPopoverRestore && STATE.recorder.active) {
-      // Boot-time restore intent finally has the state it was waiting for.
-      // Open now and clear the flag so a later push doesn't reopen after the
-      // user manually closes.
-      STATE.pendingPopoverRestore = false;
-      openRecordingPopover();
     }
   };
 
@@ -1305,26 +1272,8 @@
       return;
     }
     if (id === 'recStopBtn') {
-      // 9f: "Stop recording" now FINALIZES-KEEP — locks the recorded path,
-      // doesn't dump it. (__designQA_stopRecording maps to finalizeRecording.)
       try { await window.__designQA_stopRecording(); }
-      catch (err) { console.warn('design-qa: finalize recording failed', err); }
-      // The push handler closes the popover when active flips false.
-      return;
-    }
-    if (id === 'recDiscardBtn') {
-      // 9f: the explicit throw-away. Confirm first (it empties the recorded
-      // path); native confirm() is auto-dismissed by Playwright, so use the
-      // shadow-DOM confirmModal.
-      const ok = await confirmModal({
-        title: 'Discard recording?',
-        body: 'The recorded path will be cleared. Captured steps move to preconditions as hints. This can’t be undone here.',
-        confirmLabel: 'Discard',
-        danger: true,
-      });
-      if (!ok) return;
-      try { await window.__designQA_discardRecording(); }
-      catch (err) { console.warn('design-qa: discardRecording failed', err); }
+      catch (err) { console.warn('design-qa: stopRecording failed', err); }
       // The push handler closes the popover when active flips false.
       return;
     }
@@ -1404,12 +1353,16 @@
       btn.innerHTML = expanded ? ICON_CHEVRON_UP : ICON_CHEVRON_DOWN;
       btn.title = expanded ? 'Hide screens & pins' : 'Show screens & pins';
     }
-    // Push to Node so the state survives ANY navigation, including cross-origin
-    // (e.g. auth redirects) where localStorage would reset. Fire-and-forget;
-    // failure here is purely cosmetic — next nav re-pulls whatever Node has.
-    if (typeof window.__designQA_setUiState === 'function') {
-      window.__designQA_setUiState({ panelExpanded: expanded }).catch(() => {});
-    }
+    try { localStorage.setItem('__design_qa_inspector_expanded', expanded ? '1' : '0'); } catch {}
+  }
+
+  function readInspectorPref() {
+    try {
+      const v = localStorage.getItem('__design_qa_inspector_expanded');
+      if (v === '1') return true;
+      if (v === '0') return false;
+    } catch {}
+    return false;
   }
 
   // ------- Bootstrap / sync --------------------------------------------
@@ -1453,12 +1406,7 @@
           typeof window.__designQA_startNewView === 'function' &&
           typeof window.__designQA_sealCurrentView === 'function' &&
           typeof window.__designQA_navigateTo === 'function' &&
-          typeof window.__designQA_listSession === 'function' &&
-          // UI-state bindings — added with the cross-nav persistence fix.
-          // Without these the overlay reverts to collapsed-panel + closed-
-          // popover on every page load.
-          typeof window.__designQA_getUiState === 'function' &&
-          typeof window.__designQA_setUiState === 'function'
+          typeof window.__designQA_listSession === 'function'
         ) resolve();
         else setTimeout(check, 50);
       };
@@ -1490,12 +1438,12 @@
     const btn = e.target?.closest?.('button');
     if (!btn) return;
     const id = btn.id;
-    if (id === 'addBtn') { setDoneConfirm(false); setPlacementMode(!STATE.placementMode); return; }
+    if (id === 'addBtn') { setSaveConfirm(false); setPlacementMode(!STATE.placementMode); return; }
     if (id === 'toggleBtn') { setInspectorExpanded(!STATE.inspectorExpanded); return; }
-    if (id === 'doneBtn') { requestDone(); return; }
-    if (id === 'doneCancelBtn') { setDoneConfirm(false); return; }
-    if (id === 'doneConfirmBtn') { performDone(); return; }
-    if (id === 'newViewBtn') { setDoneConfirm(false); startNewScreenHere(); return; }
+    if (id === 'saveViewBtn') { requestSaveCurrentScreen(); return; }
+    if (id === 'saveCancelBtn') { setSaveConfirm(false); return; }
+    if (id === 'saveConfirmBtn') { performSaveCurrentScreen(); return; }
+    if (id === 'newViewBtn') { setSaveConfirm(false); startNewScreenHere(); return; }
     if (id === 'recBtn') { onRecChipClick(); return; }
   });
 
@@ -1509,32 +1457,10 @@
 
   (async () => {
     attachHost();
+    setInspectorExpanded(readInspectorPref());
     await waitForBindings();
-    // Pull the UI state Node has been holding for us. On the first page of a
-    // session both are false (defaults in capture.mjs); on every subsequent
-    // navigation they reflect whatever the user had open / expanded before
-    // navigating, including across cross-origin nav (where localStorage
-    // wouldn't have survived). Errors are swallowed — falling back to
-    // defaults is fine if the binding ever fails.
-    let ui = { panelExpanded: false, popoverOpen: false };
-    try { ui = await window.__designQA_getUiState(); } catch {}
-    setInspectorExpanded(!!ui.panelExpanded);
     await loadExistingPins();
     await refreshSession();
-    // Defer popover restore until the panel is laid out — the popover
-    // anchors to it via positionRecPopover, which reads layout. rAF is enough.
-    // If recording is already active (state push beat us), open immediately;
-    // otherwise stash the intent and let the setRecorderState setter retry
-    // when active flips true (push is throttled 200ms — we'd otherwise race).
-    if (ui.popoverOpen) {
-      STATE.pendingPopoverRestore = true;
-      requestAnimationFrame(() => {
-        if (STATE.recorder?.active && STATE.pendingPopoverRestore) {
-          STATE.pendingPopoverRestore = false;
-          openRecordingPopover();
-        }
-      });
-    }
     const obs = new MutationObserver(() => attachHost());
     obs.observe(document.documentElement, { childList: true, subtree: false });
   })();

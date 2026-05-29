@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design QA Console</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<div class="app">
+  <header class="topbar">
+    <span class="session-name" id="sessionName">Design QA</span>
+    <span class="sidebar-meta mono" id="sessionMeta"></span>
+    <span class="spacer"></span>
+    <span class="live" id="liveBadge"><span class="dot"></span> live</span>
+    <button class="btn" id="exportBtn" title="Share this session as a single file or zipped bundle" disabled>Share</button>
+  </header>
+  <div class="body">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">Screens</div>
+        <div class="sidebar-meta" id="sidebarMeta"></div>
+      </div>
+      <div class="view-list" id="viewList"></div>
+      <div class="sidebar-footer">
+        <button class="btn" id="addScreenBtn" title="Manual upload (Phase 5)" disabled>+ Add screen</button>
+      </div>
+    </aside>
+
+    <main class="canvas-pane">
+      <div class="canvas-toolbar">
+        <button class="btn" id="addPinBtn">+ Add pin</button>
+        <span class="hint" id="canvasHint">Click a pin to read it.</span>
+      </div>
+      <div class="canvas" id="canvas"></div>
+    </main>
+
+    <aside class="comments">
+      <div class="comments-header">
+        <div class="comments-title">Comments</div>
+        <div class="comments-page" id="commentsPage">—</div>
+      </div>
+      <div class="comments-filters">
+        <select class="select" id="filterStatus">
+          <option value="all">All statuses</option>
+          <option value="open">Open</option>
+          <option value="resolved">Resolved</option>
+        </select>
+        <select class="select" id="filterCategory"><option value="all">All categories</option></select>
+        <select class="select" id="sortBy">
+          <option value="created">Sort: created</option>
+          <option value="status">Sort: status</option>
+          <option value="category">Sort: category</option>
+        </select>
+      </div>
+      <div class="comments-list" id="commentsList"></div>
+    </aside>
+  </div>
+</div>
+<script type="module" src="./app.mjs"></script>
+</body>
+</html>

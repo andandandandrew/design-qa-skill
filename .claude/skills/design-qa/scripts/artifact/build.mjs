@@ -1,12 +1,38 @@
 /**
  * Builds the exported HTML artifact from a session document.
  *
- * Layout mirrors the POC: sidebar (view list) | canvas (screenshot + pins) |
- * annotations (notes for active view). Single self-contained file with
- * base64-embedded screenshots. No completion-state UI yet (Phase 5).
+ * Shared-renderer design (one editor, two outputs): instead of a second,
+ * diverging renderer, the artifact REUSES the console's render modules
+ * (core.mjs + ui/* + lib/*). Those module sources are inlined into the file via
+ * an import map whose keys (`@dqa/...`) resolve to base64 `data:` URLs, so the
+ * whole module graph loads from `file://` with no server. The session document
+ * is embedded with screenshots as `data:` URLs, and an ArtifactStore (read-
+ * mostly: resolve persists to LocalStorage) backs the same store interface the
+ * console uses.
+ *
+ * The artifact is feature-parity-with-the-console for the engineer: view +
+ * filter + sort + category display + RESOLVE. Add/move/delete/edit-note stay
+ * designer-side in the console (gated off here via ctx.options).
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { timestampSlug } from '../lib/paths.mjs';
+import { emitRecordingSpec } from '../lib/emit-spec.mjs';
+import { emitRecordingSteps } from '../lib/emit-steps.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+const CONSOLE_DIR = path.resolve(HERE, '..', 'console');
+
+// Shared modules inlined into the artifact, relative to the console dir. Order
+// is irrelevant — the import map resolves the graph — but listing leaves first
+// keeps it readable.
+const SHARED_MODULES = [
+  'lib/dom.mjs', 'lib/coords.mjs', 'lib/events.mjs',
+  'ui/recorder-format.mjs', 'ui/preview-spec.mjs', 'ui/steps.mjs',
+  'ui/sidebar.mjs', 'ui/canvas.mjs', 'ui/comments.mjs', 'ui/resizers.mjs', 'ui/toast.mjs',
+  'core.mjs', 'store/local-resolve.mjs', 'store/artifact-store.mjs',
+];
 
 function pngDimensions(buf) {
   // PNG: 8-byte signature, 4-byte IHDR length, 4-byte "IHDR",
@@ -32,62 +58,201 @@ async function loadScreenshot(sessionDir, relPath) {
   try {
     const buf = await fs.readFile(abs);
     const { width, height } = pngDimensions(buf);
-    return {
-      dataUrl: `data:image/png;base64,${buf.toString('base64')}`,
-      width,
-      height,
-    };
+    return { dataUrl: `data:image/png;base64,${buf.toString('base64')}`, width, height };
   } catch (err) {
     console.warn(`artifact: could not load ${abs}:`, err.message);
     return null;
   }
 }
 
-export async function buildArtifact({ sessionDir, session, outPath }) {
-  const viewsData = [];
+/**
+ * Read each shared module, rewrite its relative import specifiers to the
+ * `@dqa/...` import-map keys (relative specifiers don't resolve from a `data:`
+ * URL base, but bare specifiers go through the import map), and base64-encode
+ * the result into a `data:` URL. Returns the import map's `imports` object.
+ */
+async function inlineModules() {
+  const keyByAbs = new Map();
+  for (const rel of SHARED_MODULES) keyByAbs.set(path.resolve(CONSOLE_DIR, rel), `@dqa/${rel}`);
+
+  const imports = {};
+  for (const rel of SHARED_MODULES) {
+    const abs = path.resolve(CONSOLE_DIR, rel);
+    const raw = await fs.readFile(abs, 'utf8');
+    const rewritten = raw.replace(/\b(from|import)\s+(['"])([^'"]+)\2/g, (m, kw, q, spec) => {
+      if (!spec.startsWith('.')) return m; // bare/absolute specifier — leave it
+      const targetAbs = path.resolve(path.dirname(abs), spec);
+      const key = keyByAbs.get(targetAbs);
+      if (!key) throw new Error(`artifact: unmapped import "${spec}" in ${rel}`);
+      return `${kw} ${q}${key}${q}`;
+    });
+    imports[`@dqa/${rel}`] = `data:text/javascript;base64,${Buffer.from(rewritten, 'utf8').toString('base64')}`;
+  }
+  return imports;
+}
+
+/** Build the embedded session: the real shape, but with screenshots inlined as
+ *  data URLs and pins guaranteed to carry %-at-rest coords. */
+async function buildEmbeddedSession(sessionDir, session) {
+  const views = [];
   for (const view of session.views) {
     const shot = await loadScreenshot(sessionDir, view.screenshot);
     const vp = view.viewport || { width: shot?.width || 1440, height: shot?.height || 900 };
     const dpr = shot && vp.width ? shot.width / vp.width : 1;
     const docHeightCss = shot && dpr ? shot.height / dpr : vp.height;
-    viewsData.push({
+    views.push({
       id: view.id,
-      name: view.name || view.title || view.url,
-      url: view.url,
-      createdAt: view.createdAt,
-      sealedAt: view.sealedAt,
+      source: view.source || 'browser',
+      url: view.url || '',
+      name: view.name || view.title || view.url || '(unnamed)',
       viewport: vp,
       screenshot: shot ? shot.dataUrl : null,
-      hasScreenshot: !!shot,
-      pins: view.pins.map((p, i) => ({
+      createdAt: view.createdAt,
+      // Everything in the export is frozen; ensure a sealedAt so nothing reads
+      // as a live/locked screen if reopened in a console-shaped renderer.
+      sealedAt: view.sealedAt || session.endedAt || view.createdAt || null,
+      pins: view.pins.map((p) => ({
         id: p.id,
-        index: i + 1,
-        xPct: vp.width ? (p.x / vp.width) * 100 : 0,
-        yPct: docHeightCss ? (p.y / docHeightCss) * 100 : 0,
+        viewId: view.id,
+        // %-at-rest is canonical (Spike B); fall back to the px→% conversion
+        // for any legacy/unsealed pin that predates normalization.
+        xPct: typeof p.xPct === 'number' ? p.xPct : (vp.width ? (p.x / vp.width) * 100 : 0),
+        yPct: typeof p.yPct === 'number' ? p.yPct : (docHeightCss ? (p.y / docHeightCss) * 100 : 0),
         note: p.note || '',
         category: p.category || null,
+        author: p.author || null,
+        status: p.status || 'open',
+        resolvedNote: p.resolvedNote || null,
         createdAt: p.createdAt,
       })),
     });
   }
-
-  const meta = {
-    sessionId: session.id,
-    sessionName: session.name,
+  return {
+    id: session.id,
+    name: session.name,
     createdAt: session.createdAt,
     endedAt: session.endedAt,
-    viewCount: viewsData.length,
-    pinCount: viewsData.reduce((a, v) => a + v.pins.length, 0),
+    views,
   };
+}
 
-  const html = renderHtml(meta, viewsData);
+export async function buildArtifact({ sessionDir, session, outPath }) {
+  const embedded = await buildEmbeddedSession(sessionDir, session);
+  const moduleImports = await inlineModules();
+  const styles = await fs.readFile(path.join(CONSOLE_DIR, 'styles.css'), 'utf8');
+  const html = renderHtml(embedded, moduleImports, styles);
   await fs.writeFile(outPath, html, 'utf8');
   return outPath;
 }
 
-function renderHtml(meta, views) {
-  const title = `Design QA — ${escapeHtml(meta.sessionName)}`;
-  const dataJson = JSON.stringify({ meta, views }).replace(/</g, '\\u003c');
+/** YYYYMMDD slug (no separators) — used to scope `vN` so re-exports on the
+ *  same day bump versions and a fresh day's exports start over. */
+function dateSlug(d = new Date()) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+}
+
+/** Scan the session dir for `artifact-<date>-v<N>.html` siblings and return
+ *  the next free N (1 if none). Misses (ENOENT etc.) treated as empty. */
+async function nextVersion(sessionDir, date) {
+  const re = new RegExp(`^artifact-${date}-v(\\d+)\\.html$`);
+  let entries = [];
+  try { entries = await fs.readdir(sessionDir); } catch { /* empty dir */ }
+  let max = 0;
+  for (const name of entries) {
+    const m = re.exec(name);
+    if (m) max = Math.max(max, parseInt(m[1], 10));
+  }
+  return max + 1;
+}
+
+/**
+ * Higher-level export action (Phase 7, extended by Spike 8 phase 9e). Produces
+ * a PAIR of outputs from one call:
+ *
+ *  1. A versioned self-contained file at
+ *     `<sessionDir>/artifact-YYYYMMDD-vN.html`, where `N` is the next free
+ *     integer for today's date. Same file shape as `buildArtifact()` — opens
+ *     from `file://`, no server needed.
+ *  2. A directory bundle at `<sessionDir>/exports/<YYYYMMDD-HHMMSS>-vN/`
+ *     containing `artifact.html` (the same self-contained build),
+ *     `session.json` (a fresh copy of the in-memory doc), `screenshots/`
+ *     (every file referenced from `session.json`), the Spike-8 replay pair
+ *     (`recording.spec.ts` + `recording-steps.md`, both emitted from the same
+ *     `views[].steps[]` the console shows), and a README.
+ *
+ * The on-the-fly `zip` in `http-server.mjs::handleExport` archives the bundle
+ * dir's contents wholesale, so the two new files ride along with no server
+ * change. The single-file Share path intentionally omits the recording — it's
+ * a multi-file artifact (see design doc §8).
+ *
+ * Returns absolute paths so callers (HTTP endpoint, console UI) can show them
+ * to the user verbatim.
+ */
+export async function exportSession({ sessionDir, session }) {
+  const date = dateSlug();
+  const ts = timestampSlug();
+  const n = await nextVersion(sessionDir, date);
+  const versionedFile = path.join(sessionDir, `artifact-${date}-v${n}.html`);
+  const bundleDir = path.join(sessionDir, 'exports', `${ts}-v${n}`);
+
+  // 1. Versioned self-contained file. buildArtifact is idempotent: pass the
+  //    same session doc, get the same bytes (modulo `data:` URL ordering).
+  await buildArtifact({ sessionDir, session, outPath: versionedFile });
+
+  // 2. Directory bundle. `recursive: true` makes the parent `exports/` lazily.
+  await fs.mkdir(path.join(bundleDir, 'screenshots'), { recursive: true });
+  await fs.copyFile(versionedFile, path.join(bundleDir, 'artifact.html'));
+  await fs.writeFile(
+    path.join(bundleDir, 'session.json'),
+    JSON.stringify(session, null, 2),
+    'utf8',
+  );
+  // Copy every screenshot the session actually references. Missing files are
+  // logged (not fatal) so the bundle still ships if one shot is somehow gone.
+  for (const view of session.views || []) {
+    if (!view.screenshot) continue;
+    const from = path.join(sessionDir, view.screenshot);
+    const to = path.join(bundleDir, view.screenshot);
+    try {
+      await fs.mkdir(path.dirname(to), { recursive: true });
+      await fs.copyFile(from, to);
+    } catch (err) {
+      console.warn(`exportSession: skipped ${view.screenshot}:`, err.message);
+    }
+  }
+  // Spike 8 replay pair. Both emitters are pure (session doc → text) and read
+  // only `views[].steps[]` + `preconditionSteps[]`, already redacted at capture
+  // time. A session with no recorded steps still emits both files — each with a
+  // "no recorded steps" placeholder — so the bundle shape is stable.
+  const { text: specText } = emitRecordingSpec(session);
+  await fs.writeFile(path.join(bundleDir, 'recording.spec.ts'), specText, 'utf8');
+  await fs.writeFile(path.join(bundleDir, 'recording-steps.md'), emitRecordingSteps(session), 'utf8');
+
+  await fs.writeFile(
+    path.join(bundleDir, 'README.md'),
+    'Design QA export.\n\n'
+      + '- `artifact.html` — opens standalone in any browser; filter, sort, and resolve comments.\n'
+      + '- `session.json` — the source data the artifact embeds, for inspection.\n'
+      + '- `screenshots/` — every screen image the session references.\n'
+      + '- `recording.spec.ts` — a runnable Playwright spec replaying the reviewer\'s path. '
+      + 'Run with `npx playwright test recording.spec.ts`. Credentials were redacted to '
+      + '`process.env.DESIGN_QA_FIELD_*` references — set those before running.\n'
+      + '- `recording-steps.md` — the same path written out as human-followable steps.\n',
+    'utf8',
+  );
+
+  return { versionedFile, bundleDir };
+}
+
+function renderHtml(session, moduleImports, styles) {
+  const title = `Design QA — ${escapeHtml(session.name || '')}`;
+  const viewCount = session.views.length;
+  const pinCount = session.views.reduce((a, v) => a + v.pins.length, 0);
+  // Escape `<` so neither block can break out of its <script> element.
+  const sessionJson = JSON.stringify(session).replace(/</g, '\\u003c');
+  const importMap = JSON.stringify({ imports: moduleImports }).replace(/</g, '\\u003c');
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -95,233 +260,82 @@ function renderHtml(meta, views) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${title}</title>
 <style>
-  :root {
-    --bg: #1e1e1e; --bg-2: #2c2c2c; --bg-3: #383838; --bg-4: #444444;
-    --border: #3d3d3d; --border-strong: #555555;
-    --text: #eeeeee; --text-2: #a0a0a0; --text-3: #757575;
-    --accent: #0d99ff; --accent-hover: #1fa9ff; --accent-dim: rgba(13,153,255,0.16);
-    --selected-row: rgba(13,153,255,0.18);
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; background: var(--bg); color: var(--text);
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 12px; line-height: 1.45; overflow: hidden; -webkit-font-smoothing: antialiased; }
-  .mono { font-family: 'JetBrains Mono', 'SF Mono', Menlo, monospace; font-feature-settings: 'tnum'; }
-  .app { display: grid; grid-template-columns: 260px 1fr 360px; height: 100vh; }
-
-  .sidebar { background: var(--bg-2); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-  .sidebar-header { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
-  .sidebar-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); font-weight: 600; }
-  .sidebar-subtitle { font-size: 14px; color: var(--text); font-weight: 600; margin-top: 4px; word-break: break-word; }
-  .sidebar-meta { font-size: 11px; color: var(--text-3); margin-top: 4px; }
-
-  .view-list { overflow-y: auto; flex: 1; padding: 6px 0; }
-  .view-item { padding: 10px 16px; cursor: pointer; transition: background 0.08s; }
-  .view-item:hover { background: var(--bg-3); }
-  .view-item.active { background: var(--accent-dim); }
-  .view-name { font-size: 12px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .view-url { font-size: 10px; color: var(--text-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .view-meta { display: flex; justify-content: space-between; align-items: center; margin-top: 6px; font-size: 10px; color: var(--text-3); }
-  .pin-count {
-    flex-shrink: 0; padding: 1px 6px; border-radius: 999px;
-    background: var(--bg-3); border: 1px solid var(--border);
-    font-size: 10px; font-weight: 600; color: var(--text-2);
-    font-family: 'JetBrains Mono', monospace;
-  }
-  .view-item.active .pin-count { background: var(--accent); color: #ffffff; border-color: transparent; }
-
-  .canvas { background: var(--bg); overflow: auto; display: flex; align-items: flex-start; justify-content: center; padding: 24px; }
-  .canvas .empty { color: var(--text-3); margin-top: 64px; font-size: 13px; }
-  .screenshot-wrapper { position: relative; display: inline-block; box-shadow: 0 8px 32px rgba(0,0,0,0.45); border-radius: 6px; overflow: visible; max-width: 100%; }
-  .screenshot { display: block; max-width: 100%; border-radius: 6px; }
-  .no-screenshot { padding: 32px; background: var(--bg-2); border: 1px dashed var(--border); border-radius: 6px; color: var(--text-2); }
-
-  /* Pin marker — Figma comment teardrop */
-  .marker {
-    position: absolute; width: 24px; height: 24px;
-    background: var(--accent); color: #ffffff;
-    border-radius: 100% 100% 100% 0;
-    font-family: 'Inter', sans-serif;
-    font-size: 10px; font-weight: 700;
-    display: flex; align-items: center; justify-content: center;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.4), 0 0 0 1.5px #ffffff;
-    cursor: pointer; user-select: none;
-    transition: transform 0.1s, background 0.1s;
-    transform: translate(0, -100%); /* anchor bottom-left tail at (x, y) */
-  }
-  .marker > span { transform: translate(1px, -1px); }
-  .marker:hover { background: var(--accent-hover); transform: translate(0, calc(-100% - 1px)); }
-  .marker.active { background: var(--accent-hover); box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #ffffff, 0 0 0 4px rgba(13,153,255,0.4); }
-  @keyframes pin-pulse {
-    0%   { box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #ffffff, 0 0 0 0 rgba(13,153,255,0.6); }
-    60%  { box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #ffffff, 0 0 0 18px rgba(13,153,255,0); }
-    100% { box-shadow: 0 2px 6px rgba(0,0,0,0.5), 0 0 0 1.5px #ffffff, 0 0 0 0 rgba(13,153,255,0); }
-  }
-  .marker.pulse { animation: pin-pulse 1s ease-out 2; }
-
-  .annotations { background: var(--bg-2); border-left: 1px solid var(--border); display: flex; flex-direction: column; overflow: hidden; }
-  .annotations-header { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
-  .annotations-title { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); font-weight: 600; }
-  .annotations-page { font-size: 13px; color: var(--text); font-weight: 600; margin-top: 4px; line-height: 1.4; word-break: break-word; }
-  .annotations-page-url { font-size: 10px; color: var(--text-3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .annotations-list { overflow-y: auto; flex: 1; padding: 8px 8px; display: flex; flex-direction: column; gap: 6px; }
-  .annotation-item {
-    padding: 12px 14px; border-radius: 8px;
-    background: var(--bg); border: 1px solid var(--border);
-    cursor: pointer; transition: background 0.08s, border-color 0.08s;
-  }
-  .annotation-item:hover { background: var(--bg-3); border-color: var(--border-strong); }
-  .annotation-item.active { background: var(--selected-row); border-color: transparent; }
-  .annotation-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-  .annotation-number {
-    flex-shrink: 0;
-    width: 18px; height: 18px;
-    background: var(--accent); color: #ffffff;
-    border-radius: 100% 100% 100% 0;
-    font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700;
-    display: flex; align-items: center; justify-content: center;
-  }
-  .annotation-meta { font-size: 11px; color: var(--text-2); }
-  .annotation-description { font-size: 13px; color: var(--text); line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
-  .annotation-description.empty { color: var(--text-3); font-style: italic; }
-
-  ::-webkit-scrollbar { width: 10px; height: 10px; }
-  ::-webkit-scrollbar-track { background: transparent; }
-  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; border: 2px solid var(--bg); }
-  ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
-</style>
+${styles}</style>
 </head>
 <body>
 <div class="app">
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <div class="sidebar-title">Design QA</div>
-      <div class="sidebar-subtitle">${escapeHtml(meta.sessionName)}</div>
-      <div class="sidebar-meta mono">${fmtDate(meta.createdAt)} · ${meta.viewCount} ${meta.viewCount === 1 ? 'screen' : 'screens'} · ${meta.pinCount} ${meta.pinCount === 1 ? 'pin' : 'pins'}</div>
-    </div>
-    <div class="view-list" id="viewList"></div>
-  </aside>
-  <main class="canvas" id="canvas"></main>
-  <aside class="annotations">
-    <div class="annotations-header">
-      <div class="annotations-title">Comments</div>
-      <div class="annotations-page" id="annotationsPage">—</div>
-      <div class="annotations-page-url" id="annotationsPageUrl"></div>
-    </div>
-    <div class="annotations-list" id="annotationsList"></div>
-  </aside>
+  <header class="topbar">
+    <span class="session-name" id="sessionName">Design QA</span>
+    <span class="sidebar-meta mono" id="sessionMeta"></span>
+    <span class="spacer"></span>
+    <span class="sidebar-meta mono">${fmtDate(session.createdAt)} · ${viewCount} ${viewCount === 1 ? 'screen' : 'screens'} · ${pinCount} ${pinCount === 1 ? 'pin' : 'pins'}</span>
+  </header>
+  <div class="body">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-title">Screens</div>
+        <div class="sidebar-meta" id="sidebarMeta"></div>
+      </div>
+      <div class="view-list" id="viewList"></div>
+    </aside>
+
+    <main class="canvas-pane">
+      <div class="canvas-toolbar">
+        <span class="hint" id="canvasHint">Click a pin to read it.</span>
+      </div>
+      <div class="canvas" id="canvas"></div>
+    </main>
+
+    <aside class="comments">
+      <div class="comments-header">
+        <div class="comments-title">Comments</div>
+        <div class="comments-page" id="commentsPage">—</div>
+      </div>
+      <div class="comments-filters">
+        <select class="select" id="filterStatus">
+          <option value="all">All statuses</option>
+          <option value="open">Open</option>
+          <option value="resolved">Resolved</option>
+        </select>
+        <select class="select" id="filterCategory"><option value="all">All categories</option></select>
+        <select class="select" id="sortBy">
+          <option value="created">Sort: created</option>
+          <option value="status">Sort: status</option>
+          <option value="category">Sort: category</option>
+        </select>
+      </div>
+      <div class="comments-list" id="commentsList"></div>
+    </aside>
+  </div>
 </div>
-<script id="data" type="application/json">${dataJson}</script>
-<script>
-(() => {
-  const DATA = JSON.parse(document.getElementById('data').textContent);
-  const { meta, views } = DATA;
-  let activeViewId = views[0]?.id || null;
-  let activeAnnotationId = null;
 
-  const $ = (id) => document.getElementById(id);
-  const escapeHtml = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+<script type="importmap">${importMap}</script>
+<script type="application/json" id="dqa-session">${sessionJson}</script>
+<script type="module">
+import { createApp, wireControls } from '@dqa/core.mjs';
+import { ArtifactStore } from '@dqa/store/artifact-store.mjs';
+import { setupResizers } from '@dqa/ui/resizers.mjs';
 
-  function renderViewList() {
-    const list = $('viewList');
-    list.innerHTML = views.map((v) => \`
-      <div class="view-item \${v.id === activeViewId ? 'active' : ''}" data-id="\${v.id}">
-        <div class="view-name">\${escapeHtml(v.name)}</div>
-        <div class="view-url" title="\${escapeHtml(v.url)}">\${escapeHtml(v.url)}</div>
-        <div class="view-meta">
-          <span class="mono">\${(v.createdAt || '').slice(0,10)}</span>
-          <span class="pin-count mono">\${v.pins.length}</span>
-        </div>
-      </div>
-    \`).join('');
-    list.querySelectorAll('.view-item').forEach((el) => {
-      el.addEventListener('click', () => {
-        activeViewId = el.dataset.id;
-        activeAnnotationId = null;
-        renderAll();
-      });
-    });
-  }
-
-  function renderCanvas() {
-    const canvas = $('canvas');
-    const view = views.find((v) => v.id === activeViewId);
-    if (!view) { canvas.innerHTML = '<div class="empty">No screen selected.</div>'; return; }
-    if (!view.hasScreenshot) {
-      canvas.innerHTML = \`<div class="no-screenshot">No screenshot captured for this screen.<br><br>\${view.pins.length} pin\${view.pins.length === 1 ? '' : 's'} stored.</div>\`;
-      return;
-    }
-    canvas.innerHTML = \`
-      <div class="screenshot-wrapper" id="ssw">
-        <img class="screenshot" src="\${view.screenshot}" alt="\${escapeHtml(view.name)}" />
-        \${view.pins.map((p) => \`
-          <div class="marker \${p.id === activeAnnotationId ? 'active' : ''}" data-id="\${p.id}" style="left:\${p.xPct}%;top:\${p.yPct}%;"><span>\${p.index}</span></div>
-        \`).join('')}
-      </div>
-    \`;
-    canvas.querySelectorAll('.marker').forEach((el) => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.id;
-        activeAnnotationId = activeAnnotationId === id ? null : id;
-        renderAll();
-        const target = document.querySelector(\`.annotation-item[data-id="\${id}"]\`);
-        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-      });
-    });
-  }
-
-  function renderAnnotations() {
-    const list = $('annotationsList');
-    const pageEl = $('annotationsPage');
-    const urlEl = $('annotationsPageUrl');
-    const view = views.find((v) => v.id === activeViewId);
-    if (!view) { pageEl.textContent = '—'; urlEl.textContent = ''; list.innerHTML = ''; return; }
-    pageEl.textContent = view.name;
-    urlEl.textContent = view.url;
-    urlEl.title = view.url;
-    if (view.pins.length === 0) {
-      list.innerHTML = '<div style="padding:18px 14px;color:var(--text-3);">No pins on this screen.</div>';
-      return;
-    }
-    list.innerHTML = view.pins.map((p) => \`
-      <div class="annotation-item \${p.id === activeAnnotationId ? 'active' : ''}" data-id="\${p.id}">
-        <div class="annotation-head">
-          <div class="annotation-number">\${p.index}</div>
-          <div class="annotation-meta mono">\${(p.createdAt || '').slice(0,16).replace('T',' ')}</div>
-        </div>
-        <div class="annotation-description \${p.note ? '' : 'empty'}">\${p.note ? escapeHtml(p.note) : '(no comment)'}</div>
-      </div>
-    \`).join('');
-    list.querySelectorAll('.annotation-item').forEach((el) => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.id;
-        activateFromAnnotation(id);
-      });
-    });
-  }
-
-  function activateFromAnnotation(id) {
-    activeAnnotationId = activeAnnotationId === id ? null : id;
-    renderAll();
-    if (!activeAnnotationId) return;
-    const marker = document.querySelector(\`.marker[data-id="\${id}"]\`);
-    if (!marker) return;
-    // Scroll the canvas so the marker is centered in view.
-    const canvas = $('canvas');
-    const cRect = canvas.getBoundingClientRect();
-    const mRect = marker.getBoundingClientRect();
-    const dx = (mRect.left - cRect.left) - (cRect.width / 2 - mRect.width / 2);
-    const dy = (mRect.top - cRect.top) - (cRect.height / 2 - mRect.height / 2);
-    canvas.scrollBy({ left: dx, top: dy, behavior: 'smooth' });
-    // Pulse the marker so the user can see which one was clicked.
-    marker.classList.remove('pulse');
-    void marker.offsetWidth; // restart animation
-    marker.classList.add('pulse');
-  }
-
-  function renderAll() { renderViewList(); renderCanvas(); renderAnnotations(); }
-  renderAll();
-})();
+try {
+  const session = JSON.parse(document.getElementById('dqa-session').textContent);
+  const store = new ArtifactStore(session);
+  const ctx = createApp({
+    store,
+    mounts: {
+      sidebar: document.getElementById('viewList'),
+      canvas: document.getElementById('canvas'),
+      comments: document.getElementById('commentsList'),
+    },
+    // Read-mostly: the engineer can resolve, nothing else mutates.
+    options: { canResolve: true },
+  });
+  wireControls(ctx);
+  store.subscribe(() => ctx.render());
+  setupResizers(document.querySelector('.body'));
+  ctx.render();
+} catch (err) {
+  document.body.innerHTML = '<pre style="padding:24px;color:#f0616d">Artifact failed to load:\\n' + (err && (err.stack || err)) + '</pre>';
+}
 </script>
 </body>
 </html>`;

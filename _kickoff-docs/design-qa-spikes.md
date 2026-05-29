@@ -121,6 +121,85 @@ These spikes are a precondition to committing to the skill spec. Findings will s
 
 **Done when.** We have a recommended export shape, with the completion-state mechanism specified concretely enough to build.
 
+**Decision (2026-05-27, post-demo).** Export a small **directory**, not just a single file. Contents: `artifact.html` + `session.json` (+ `screenshots/`) + the recorded Playwright script (Spike 8). Opening the directory locally unlocks the **full console-style interactivity** (filter, search categories, resolve/check-off), since the data and assets sit beside the HTML. This supersedes the "single self-contained file is the goal" framing — a single inlined file remains a convenience fallback for quick sharing. Engineer-side resolve persistence can then write to the sidecar JSON in the directory (still bounded by browser file-write limits from `file://`). The in-progress artifact-parity build (Phase 7, shared-renderer) uses **LocalStorage in the interim**; because the artifact reuses the console render modules over a swappable store adapter, moving resolve persistence to a sidecar `session.json` later is a store-adapter change, not a rewrite. How `artifact.html` itself is packaged may change to suit the directory model — deferred to the export build.
+
+**SHIPPED (Phase 7, commit `abad681`, 2026-05-28).** The bundle ships as a **`.zip`** (one save dialog, single artifact to share) rather than an unzipped directory — same contents (`artifact.html` + `session.json` + `screenshots/` + `README.md`). The single-file form ships in parallel as a separate Share option. Both flows present a **native OS save dialog** (`window.showSaveFilePicker` on Chromium, `<a download>` fallback elsewhere); the user picks where the file lands. A silent project archive lives at `<sessionDir>/artifact-YYYYMMDD-vN.html` + `<sessionDir>/exports/<HHMMSS>-vN/` (every Share writes both). The bundle's `README.md` notes the empty Spike-8 Playwright-script slot. **Sidecar-JSON resolve persistence (the "engineer-side completion" question) is still OPEN** — the shipped artifact's `ArtifactStore.resolvePin` keeps writing to LocalStorage; moving to the bundle's `session.json` is the planned store-adapter swap, not yet done.
+
+---
+
+## Spike 8 — Interaction recording & replay *(post-demo, 2026-05-27; design + POC complete 2026-05-28)*
+
+**Status (2026-05-28):** DESIGN + POC COMPLETE; PHASING IS THE NEXT ASK. Full
+design at `_kickoff-docs/design-qa-interaction-recording.md`. Mechanism validated
+against an Auth0-protected app — Playwright 1.60.0's private `context._enableRecorder`
++ `recorderMode: 'api'` works, no Inspector window, getByRole-quality selectors,
+URL segmentation works via per-event `pageUrl`. Throwaway POC at
+`.claude/skills/design-qa/scripts/spike8-poc.mjs` (output `spike8-poc-out/`,
+gitignored). Headless mechanism smoke at `spike8-smoke.mjs`; headless redaction
+smoke at `spike8-redaction-smoke.mjs` (planned to port under `scripts/lib/__tests__/`
+as a permanent regression when 9a lands).
+
+**🚨 The POC surfaced an unanticipated security finding:** the recorder serializes
+raw fill values into `action.text`, the `.ts` `code` snippet, AND the `ariaSnapshot`
+ARIA-tree string (which lists every visible input's current value — so a password
+typed at step 3 keeps appearing in every subsequent action's snapshot). The
+original design treated auth as "the engineer's problem" (no `storageState`
+shipping); that handled tokens but missed the more immediate credential-leak
+vector while the reviewer types into the live form. A capture-time redaction
+layer was added to the design doc and validated by smoke. **Redaction is a
+security boundary — must land in the same phase as the recorder adapter (9a),
+not later.** Full algorithm + tradeoffs in the design doc §"POC results" + §4.
+
+**Question.** When capturing from the browser, can we also record the series of interactions the QA person took to reach the annotated state, and emit it both as (a) an executable Playwright script and (b) a human-followable step list? *(Decision: emit BOTH forms.)*
+
+**Why it matters.** Today the feedback is prescriptive (screenshot + pins), but an engineer can't easily reproduce the **conditions** that produced the state — a form-validation error, a specific filter, a particular logged-in view. Recording the path makes the handoff reproducible: the engineer can either *run* the script to land on the exact state, or *follow* the written steps.
+
+**What to probe.**
+
+- Can we record interactions from the same headed Chromium we already drive (CDP, Playwright tracing, or codegen-style action capture) without disrupting the designer's natural navigation?
+- Granularity: which events to record (navigations, clicks, inputs, scroll, explicit waits) and how to keep the emitted script robust rather than brittle.
+- The **auth / preconditions problem**: the persistent browser-profile carries the QA person's cookies, but a script handed to an engineer won't. How do we represent login/preconditions — a manual "log in first" step, env-injected creds, or left to the engineer?
+- Mapping a recorded path to a **screen**: each sealed screen should carry the script segment that produced it.
+- Output format that round-trips cleanly into the export directory (Spike 7).
+
+**Done when.** A prototype records a multi-step path on a real app and produces *both* an executable Playwright spec that replays to the same state *and* a readable step list, with a clear position on the auth/preconditions problem.
+
+---
+
+## Spike 9 — Post-change regression diff *(post-demo, 2026-05-27) — RESEARCH ONLY*
+
+**Question.** Once a screen has a recorded path (Spike 8) plus resolved/open comments, can we re-run the path after code changes and produce a useful **diff** of what changed against what was commented and resolved? This is explicitly a research spike — assess what is actually feasible before committing to any approach; do not assume.
+
+**Why it matters.** Closes the loop. A designer's comment plus the ability to return to the same state means we could verify whether feedback was actually addressed after the code changed — regression-testing the *design*, not just the code.
+
+**What to probe (compare candidate approaches; do not pre-commit).**
+
+- **Visual diff at pinned regions** — re-run, re-screenshot, pixel/region-compare against the original at each pin.
+- **Element / state assertions** — capture DOM/selector state at each pin and re-assert after changes; precise but brittle to markup churn.
+- **LLM-judged validity** — an LLM compares the old screenshot + comment against the new render and judges whether each comment is addressed or stale; flexible but fuzzy.
+- Hybrids; robustness to layout churn; how to present results (per-pin status: changed / unchanged / likely-resolved).
+- Hard dependency on Spike 8 (need a replayable path first).
+
+**Done when.** A written recommendation comparing the approaches with confidence levels and a proposed first implementation — **not** an implementation.
+
+---
+
+## Spike 10 — Compare-to-Figma (LLM-driven) *(post-demo, 2026-05-27)*
+
+**Question.** For reviewers who sense something is "off" but can't articulate the feedback, can we drive an LLM comparison between the live/screenshotted state and its Figma source, and have it suggest or generate pin descriptions?
+
+**Why it matters.** Lowers the articulation bar. Many reviewers spot wrongness without knowing the design vocabulary; an LLM diff against the design source can name it for them.
+
+**What to probe.**
+
+- **Linkage (decided): the QA person manually provides a Figma node URL per screen.** Where is that captured in the session / UI, and how does it attach to a screen?
+- Mechanism: **Figma Console MCP + the desktop bridge** to pull the Figma frame representation; combine it with our screenshot + URL + recorded path (Spike 8) as the "current state" reference.
+- LLM output modes: (a) add descriptions to already-placed pins; (b) generate pins *and* descriptions; (c) produce a non-binding "things to consider" list the reviewer uses to place their own pins.
+- Where this runs: in the capture flow (back in the browser frame) vs. the console; how results are written back to `session.json`.
+- Guardrails: keep LLM output as **suggestions a human accepts**, not silent auto-pinning.
+
+**Done when.** A design sketch of the flow (manual Figma link → MCP fetch → LLM compare → suggested/generated pins) with the three output modes scoped and the MCP dependency confirmed.
+
 ---
 
 ## Out of scope for spikes
@@ -129,7 +208,7 @@ The following are deferred per the planning conversation and should not be probe
 
 - Responsive / multi-viewport capture flows
 - Persistent multi-session history (a QA repository)
-- Jira / Figma / Storybook integration depth
+- Jira / Storybook integration depth (Figma compare is now **in scope** as Spike 10)
 - Threaded replies on annotations
 - Summary page contents in the artifact
 - Commit gates between pin drop and pin persistence

@@ -1,0 +1,105 @@
+{
+  "version": 2,
+  "id": "sess_fixture",
+  "name": "Fixture — console editor demo",
+  "createdAt": "2026-05-26T19:54:58.847Z",
+  "endedAt": "2026-05-26T20:01:22.136Z",
+  "views": [
+    {
+      "id": "view_9703d9ebfaf3",
+      "source": "browser",
+      "url": "https://www.google.com/",
+      "title": "Google",
+      "name": "Google",
+      "viewport": {
+        "width": 1200,
+        "height": 1257
+      },
+      "screenshot": "screenshots/view_9703d9ebfaf3.png",
+      "createdAt": "2026-05-26T19:55:17.846Z",
+      "sealedAt": "2026-05-26T19:56:51.570Z",
+      "pins": [
+        {
+          "id": "pin_d51fb8aa9ea5",
+          "viewId": "view_9703d9ebfaf3",
+          "xPct": 73,
+          "yPct": 39.777247414478914,
+          "note": "Heading uses 28px but the design spec calls for 32px / 600 weight.",
+          "category": "spacing",
+          "author": "Andrew Frank",
+          "status": "resolved",
+          "resolvedNote": "Fixed in PR #482.",
+          "createdAt": "2026-05-26T19:55:17.854Z"
+        },
+        {
+          "id": "pin_b3d905118a29",
+          "viewId": "view_9703d9ebfaf3",
+          "xPct": 54.25,
+          "yPct": 53.46062052505967,
+          "note": "This control should use the primary accent token, not the hard-coded blue.",
+          "category": "color",
+          "author": "Jordan Lee",
+          "status": "open",
+          "resolvedNote": null,
+          "createdAt": "2026-05-26T19:55:51.060Z"
+        }
+      ]
+    },
+    {
+      "id": "view_99c17de6ac66",
+      "source": "browser",
+      "url": "https://www.google.com/",
+      "title": "Google",
+      "name": "Google",
+      "viewport": {
+        "width": 1200,
+        "height": 1257
+      },
+      "screenshot": "screenshots/view_99c17de6ac66.png",
+      "createdAt": "2026-05-26T20:00:13.206Z",
+      "sealedAt": "2026-05-26T20:00:47.816Z",
+      "pins": [
+        {
+          "id": "pin_5564a9c2f080",
+          "viewId": "view_99c17de6ac66",
+          "xPct": 49.083333333333336,
+          "yPct": 62.21161495624503,
+          "note": "s1 c3",
+          "category": "text",
+          "author": "Andrew Frank",
+          "status": "open",
+          "resolvedNote": null,
+          "createdAt": "2026-05-26T20:00:13.212Z"
+        }
+      ]
+    },
+    {
+      "id": "view_6b78cf2b9f7b",
+      "source": "browser",
+      "url": "https://www.google.com/",
+      "title": "Google",
+      "name": "s3",
+      "viewport": {
+        "width": 1440,
+        "height": 900
+      },
+      "screenshot": "screenshots/view_6b78cf2b9f7b.png",
+      "createdAt": "2026-05-26T20:00:47.817Z",
+      "sealedAt": "2026-05-26T20:01:22.135Z",
+      "pins": [
+        {
+          "id": "pin_9b8f34c3b694",
+          "viewId": "view_6b78cf2b9f7b",
+          "xPct": 43.40277777777778,
+          "yPct": 64.83691328560064,
+          "note": "s3 c1",
+          "category": "interaction",
+          "author": "Jordan Lee",
+          "status": "resolved",
+          "resolvedNote": "Fixed in PR #482.",
+          "createdAt": "2026-05-26T20:01:07.968Z"
+        }
+      ]
+    }
+  ]
+}
