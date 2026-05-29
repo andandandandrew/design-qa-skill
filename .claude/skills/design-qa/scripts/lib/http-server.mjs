@@ -287,7 +287,10 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
    *   ?kind=bundle → application/zip + Content-Disposition = artifact-YYYYMMDD-vN.zip
    *                 (the bundle dir, zipped on the fly via the OS `zip` cmd)
    *
-   * Gated to the OWNED session this pass — sibling export is a follow-up.
+   * Optional `?id=<basename>` exports a SIBLING (lookback) instead of the owned
+   * session — same "one writer at a time" model as mutate/upload/preview. The
+   * doc comes from `resolveTargetStore`; the artifact + silent `exports/`
+   * archive land in that session's OWN dir, so we thread its dir too.
    */
   async function handleExport(req, res) {
     const q = new URLSearchParams((req.url || '').split('?')[1] || '');
@@ -295,9 +298,13 @@ export async function startHttpServer(store, { sessionDir, consoleDir, log = () 
     if (kind !== 'single' && kind !== 'bundle') {
       return sendJson(res, 400, { ok: false, error: 'kind must be single|bundle' });
     }
+    const id = q.get('id');
+    const target = await resolveTargetStore(id);
+    if (target === null) return sendJson(res, 404, { ok: false, error: 'unknown session id' });
+    const targetDir = id && id !== ownedBasename ? siblingSessionDir(id) : sessionDir;
     try {
       const { versionedFile, bundleDir } = await exportSession({
-        sessionDir, session: store.doc,
+        sessionDir: targetDir, session: target.doc,
       });
       // Both shapes derive a recognizable filename from the versioned file (the
       // bundle dir's `<HHMMSS>-vN` name is timestamp-y; users want to see the

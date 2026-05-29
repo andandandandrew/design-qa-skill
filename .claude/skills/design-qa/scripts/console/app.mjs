@@ -58,17 +58,17 @@ async function main() {
     addScreenBtn.addEventListener('click', () => pickAndUploadScreen(ctx, store));
   }
 
-  // Export (Phase 7) — gated to the OWNED live session. Lookback navigates to
-  // a sibling but the server still owns ITS session; sibling export is a
-  // follow-up (see http-server's handleExport). `listSessions` is the
-  // live-store marker (MemoryStore fixture doesn't expose it).
+  // Export (Phase 7) — works for the owned live session AND archived siblings
+  // (lookback). Both HttpStore and LookbackStore expose `listSessions`, which is
+  // the live-store marker (the MemoryStore fixture doesn't); a lookback export
+  // threads its `?id=<basename>` through to the sibling-export branch in
+  // http-server's handleExport.
   const exportBtn = document.getElementById('exportBtn');
-  if (exportBtn && !lookback && typeof store.listSessions === 'function') {
+  if (exportBtn && typeof store.listSessions === 'function') {
+    const exportId = lookback ? store.basename : null;
     exportBtn.disabled = false;
     exportBtn.title = 'Share this session as a single file or zipped bundle';
-    exportBtn.addEventListener('click', () => openExportChooser(exportBtn));
-  } else if (exportBtn && lookback) {
-    exportBtn.title = 'Switch to the live session to share';
+    exportBtn.addEventListener('click', () => openExportChooser(exportBtn, exportId));
   }
 
   // Re-render on any store mutation. With HttpStore this is also driven by SSE
@@ -213,7 +213,7 @@ async function setupSwitcher(ctx, store, lookback) {
  * every export (project record); the user-facing flow only surfaces the
  * save-as path so "Export" reads the same way it does in any other app.
  */
-function openExportChooser(btn) {
+function openExportChooser(btn, exportId = null) {
   closeExportDialog();
 
   let kind = 'single'; // default
@@ -239,7 +239,7 @@ function openExportChooser(btn) {
     cancelBtn.disabled = true;
     nextBtn.textContent = 'Sharing…';
     try {
-      await runSaveDialog(kind);
+      await runSaveDialog(kind, exportId);
       closeExportDialog();
     } catch (err) {
       // AbortError from the picker is "user cancelled" — silent.
@@ -282,8 +282,9 @@ function openExportChooser(btn) {
  * exactly where they want. The fallback (`<a download>`) is a plain
  * browser-download (goes to the user's Downloads folder) for Safari/Firefox.
  */
-async function runSaveDialog(kind) {
-  const url = `/api/export?kind=${encodeURIComponent(kind)}`;
+async function runSaveDialog(kind, exportId = null) {
+  let url = `/api/export?kind=${encodeURIComponent(kind)}`;
+  if (exportId) url += `&id=${encodeURIComponent(exportId)}`;
   const res = await fetch(url, { method: 'POST' });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
