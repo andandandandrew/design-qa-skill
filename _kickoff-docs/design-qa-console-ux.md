@@ -5,7 +5,15 @@ coordinate model), and records a **thin Spike C** decision (localhost serving) �
 phase the build, not to implement it.
 
 Parent: `design-qa-console-architecture.md` (the v2 pivot). This doc is the design input
-to **Phase 2** (the pin-on-image editor) and downstream phases. Nothing here is built yet.
+to **Phase 2** (the pin-on-image editor) and downstream phases.
+
+> ⚠ **Superseded for visuals/layout (2026-05-29).** The console + overlay were rebuilt on the
+> **DesignOS App Frame** in Phase 8 (commits `1dda37a` console, `c851c6e` overlay). The
+> three-pane / collapsible-sidebar UX sketched below is the *original* plan; for what
+> actually shipped (App Frame, `Comments | Steps` pill tabs, flat comment cards, top-center
+> draggable capture toolbar) and the file map, see the architecture doc's **"Phase 8 — UI
+> consistency & Figma-parity (AS-BUILT)"** section. The **workflows/affordances and data
+> model here still hold**; only the chrome's look/layout changed.
 
 The look/feel is the existing Figma dark theme already proven in `artifact/build.mjs`
 (`--accent: #0d99ff`, three-pane layout). The console **refactors that proven render into

@@ -196,7 +196,14 @@ becomes its screenshot.
 
 ---
 
-## Comment-card layout & resolve UX *(BUILT 2026-05-28)*
+## Comment-card layout & resolve UX *(BUILT 2026-05-28; card VISUALS later superseded by Phase 8)*
+
+> ⚠ **Card layout below is the 2026-05-28 cut.** Phase 8 (commit `1dda37a`, 2026-05-29)
+> reshaped the cards into DesignOS **flat, borderless** cards — avatar moved to the LEFT,
+> the category control + delete moved into a hover **⋯ menu**, and the card sits in a
+> `Comments | Steps` pill-tab pane. The **resolve UX (check → toast w/ Undo, silent
+> unresolve) and the data model are unchanged.** For current comment visuals + where to
+> tweak them, see "Phase 8 → Comment-system visuals — where to tweak" below.
 
 The console's right pane (and, by inheritance, the exported artifact's right pane) was
 reshaped to mirror Figma's comment-card pattern. Reference screenshots live in
@@ -450,15 +457,59 @@ be built now — recorded so the build can pick them up later.
 
 ---
 
-## Phase 8 — UI consistency & Figma-parity *(deferred, 2026-05-28)*
+## Phase 8 — UI consistency & Figma-parity *(BUILT + COMMITTED 2026-05-29, branch `designOS`)*
 
 Captured after the comment-card and toast/Undo redesign (which were folded into Phase 6
 as in-flight feedback). Phase 8 is the **dedicated UI consistency phase** that runs
-**after the functional phases finish** (Phase 7 export remainder, any further functional
-work), so aesthetic changes don't muddy diffs that should read as functional. Reference
-screenshots live in `_qa/figma-comment-ui/`. Nothing in this phase is built yet.
+**after the functional phases finish**, so aesthetic changes don't muddy functional diffs.
+Reference screenshots live in `_qa/figma-comment-ui/`.
 
-**Goals**
+### AS-BUILT status (supersedes the original goals below)
+
+Phase 8 grew past a token re-skin into a **full DesignOS App Frame rebuild** of both
+surfaces, built against the external DesignOS design system (`/Users/andrewfrank/code/design-gen/DesignOS`;
+see the `designos-reference` memory). Suite 53/53 throughout.
+
+- **Console — DONE, commit `1dda37a`.** No top bar (App Frame): identity → left header,
+  Share + presence → right pane. **Left = Screens** (brand tile, file name + session
+  FileTrigger chevron menu, recessed Search, rich rows, per-row ⋯ → Delete screen).
+  **Center** = dot-grid canvas + floating QA-verb cluster. **Right = `Comments | Steps`
+  pill tabs** (the DesignOS "Sidebar Steps" composite). **Collapsible panes were REMOVED**
+  (user: not needed) — so the original "collapsible panes / collapsed pill" goal below is
+  void. lucide icons; **no monospace in chrome** (mono only for the literal `.ts` Preview spec).
+- **Capture overlay — DONE, commit `c851c6e`.** Full rewrite of `overlay/inject.js` to the
+  DesignOS `browser-live.jsx` form factor: a **draggable top-center mini-toolbar**
+  `grip ┃ comment ＋ ┃ ● record ▾ · Done` (the old top-right inspector with screens/pins
+  lists is GONE — review is console-only; pins stay interactive on the page). New record
+  glyph states, a top recording indicator (step COUNT, not a timer) that expands into the
+  steps timeline, and Playwright's own in-page recorder toolbar is hidden. See the
+  `phase-8-ui-parity` memory for the full as-built detail + gotchas.
+
+### File map (where the UI lives)
+
+- Console chrome: `scripts/console/{index.html, styles.css, tokens.css, base.css, app.mjs, core.mjs}`
+  + `scripts/console/ui/{sidebar,comments,steps,icons,menu,toast,canvas,preview-spec}.mjs`.
+- Capture overlay: `scripts/overlay/inject.js` (self-contained; inlines its own copy of the
+  DesignOS tokens + lucide glyph paths — a closed shadow root can't `<link>` the console CSS).
+- Daemon wiring for the overlay: `scripts/lib/capture.mjs`.
+- Provenance of what was adopted from DesignOS: `designos.lock.json` (repo root) — **still owes
+  an overlay-adoption pass** (browser-live form-factor + steps-panel timeline + clusters Menu).
+
+### → Comment-system visuals — where to tweak (for the next pass)
+
+The **comment cards** (console + artifact, right "Comments" tab) live in
+`scripts/console/ui/comments.mjs`; the **resolve toast** in `scripts/console/ui/toast.mjs`.
+Phase 8 reshaped the cards into **DesignOS flat, borderless cards** (avatar LEFT, body right,
+footer category tag, hover ⋯/check; category + delete in the ⋯ menu) — this **supersedes the
+old bordered-card layout described in the "Comment-card layout & resolve UX" section above**.
+The DesignOS reference for this is `DesignOS/src/app/comments-panel.jsx` (RightComments —
+flat CommentCard). The overlay's comment **composer** (temp-pin pill) and **edit popover** are
+in `scripts/overlay/inject.js` (`.composer-pill` / `.popover`); changes there don't touch the
+console cards (separate codepaths, shared token values only). Tokens for both: `tokens.css` /
+the inlined block at the top of `inject.js`. Remember: the daemon caches `inject.js` +
+`capture.mjs` at session spawn, so overlay/daemon edits need a fresh `/design-qa` session.
+
+**Original goals** *(historical — see AS-BUILT above for what actually shipped)*
 
 1. **Sidebar parity with Figma.** The right comments pane was reshaped to match Figma's
    comment-card layout (avatar / breadcrumb / byline / note + circular resolve button +
