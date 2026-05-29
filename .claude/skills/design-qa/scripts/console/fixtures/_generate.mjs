@@ -21,7 +21,7 @@ if (!srcDir) {
   process.exit(2);
 }
 
-const CATEGORIES = ['spacing', 'color', 'text', 'interaction', 'component'];
+const CATEGORIES = ['visual', 'copy', 'spec', 'question', 'bug'];
 const AUTHORS = ['Andrew Frank', 'Jordan Lee'];
 const SAMPLE_NOTES = [
   'Heading uses 28px but the design spec calls for 32px / 600 weight.',

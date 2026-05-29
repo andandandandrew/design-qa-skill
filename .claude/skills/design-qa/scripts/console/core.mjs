@@ -17,9 +17,17 @@ import { renderComments } from './ui/comments.mjs';
  * knows the difference; both only see `ctx`.
  */
 
-export const CATEGORIES = [
-  'spacing', 'color', 'text', 'interaction', 'code-pattern', 'component', 'workflow', 'page',
-];
+// DesignOS canonical comment categories (app.jsx COMMENT_CATEGORIES) — shared
+// by the sidebar tag, the canvas comment card, and the browser overlay (which
+// inlines the same palette). Single source of truth for label + dot color.
+export const CATEGORY_META = {
+  visual:   { label: 'Visual',   color: 'oklch(0.72 0.18 295)' },
+  copy:     { label: 'Copy',     color: 'oklch(0.70 0.14 230)' },
+  spec:     { label: 'Spec',     color: 'oklch(0.72 0.16 152)' },
+  question: { label: 'Question', color: 'oklch(0.78 0.16 80)' },
+  bug:      { label: 'Bug',      color: 'oklch(0.65 0.20 25)' },
+};
+export const CATEGORIES = Object.keys(CATEGORY_META);
 
 const DEFAULT_OPTIONS = {
   canPlacePins: false, // Add pin + drag-to-move (repositioning is a placement op)
@@ -38,6 +46,7 @@ export function createApp({ store, mounts, options = {} }) {
     activePinId: null,
     placeMode: false,
     composer: null, // {viewId, xPct, yPct} while a new pin is being authored
+    editing: false, // the active pin's canvas card is in edit mode (vs read-only)
     filters: { status: 'all', category: 'all', sortBy: 'created', q: '' },
     screenQuery: '', // left-sidebar search term (filters the screens list)
     rightTab: 'comments', // right pane tab: 'comments' | 'steps'
@@ -49,6 +58,7 @@ export function createApp({ store, mounts, options = {} }) {
     state,
     options: opts,
     CATEGORIES,
+    CATEGORY_META,
     setState(patch) { Object.assign(state, patch); ctx.render(); },
     activeView() { return store.getView(state.activeViewId); },
     /** Live-screen ownership (§6): an unsealed browser view is owned by the

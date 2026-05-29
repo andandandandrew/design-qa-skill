@@ -286,13 +286,16 @@ export class SessionStore {
     return pin;
   }
 
-  async updatePin({ pinId, note, x, y }) {
+  async updatePin({ pinId, note, x, y, category }) {
     for (const view of this.doc.views) {
       const pin = view.pins.find((p) => p.id === pinId);
       if (pin) {
         if (typeof note === 'string') pin.note = note;
         if (typeof x === 'number') pin.x = x;
         if (typeof y === 'number') pin.y = y;
+        // category: string sets it, explicit null clears it, undefined leaves
+        // it untouched (so a note/coord update doesn't wipe the tag).
+        if (category !== undefined) pin.category = category;
         await this.persist();
         return pin;
       }

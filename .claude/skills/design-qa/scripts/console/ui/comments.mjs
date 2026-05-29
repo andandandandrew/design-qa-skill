@@ -1,7 +1,6 @@
 import { el } from '../lib/dom.mjs';
 import { showToast } from './toast.mjs';
 import { icon } from './icons.mjs';
-import { openMenu } from './menu.mjs';
 import { renderStepsTab } from './steps.mjs';
 
 /**
@@ -62,24 +61,17 @@ function buildCard(ctx, p, view) {
     el('span', { class: 'comment-author' }, authorName),
     el('span', { class: 'comment-time', title: p.createdAt || '' }, ` ${formatRelative(p.createdAt)}`),
   ]);
+  // Read-only in the list — the note is truncated (CSS line-clamp) because the
+  // full read + all editing happens on the canvas card, reached by selecting.
   const noteEl = el('div', { class: `comment-note ${p.note ? '' : 'empty'}` }, p.note || '(no comment)');
-  if (options.canEditNotes) {
-    noteEl.addEventListener('click', (e) => { e.stopPropagation(); startNoteEdit(ctx, noteEl, p); });
-  }
 
   const bodyKids = [crumb, byline, noteEl];
-  if (p.category) bodyKids.push(buildCategoryTag(p.category));
+  if (p.category) bodyKids.push(buildCategoryTag(ctx, p.category));
   const body = el('div', { class: 'comment-body' }, bodyKids);
 
-  // ── Top-right actions (revealed on hover / when selected) ──
+  // Top-right action: resolve check only (quick triage). Category, edit, and
+  // delete live on the canvas card — the sidebar is purely a fast index.
   const actions = [];
-  const moreItems = buildMoreItems(ctx, p);
-  if (moreItems.length) {
-    const moreBtn = el('button', { class: 'comment-act', title: 'More', 'aria-haspopup': 'true',
-      onclick: (e) => { e.stopPropagation(); openMenu(moreBtn, moreItems, { align: 'right', width: 200 }); } });
-    moreBtn.append(icon('more', 15));
-    actions.push(moreBtn);
-  }
   if (options.canResolve) {
     const resolveBtn = el('button', {
       class: `resolve-btn ${resolved ? 'on' : ''}`,
@@ -92,42 +84,22 @@ function buildCard(ctx, p, view) {
   }
   const actionsWrap = actions.length ? el('div', { class: 'comment-actions' }, actions) : null;
 
+  // Selecting a card focuses its pin + opens the read card on the canvas.
   return el('div', {
     class: `comment ${p.id === state.activePinId ? 'active' : ''} ${resolved ? 'resolved' : ''}`,
     dataset: { id: p.id },
-    onclick: () => ctx.setState({ activePinId: state.activePinId === p.id ? null : p.id }),
+    onclick: () => ctx.setState({ activePinId: state.activePinId === p.id ? null : p.id, editing: false }),
   }, [avatar, body, actionsWrap].filter(Boolean));
 }
 
-/** The `⋯` menu items for a card: category picker (+ clear) and delete. Each
- *  gated by the surface's options, so the read-only artifact shows nothing. */
-function buildMoreItems(ctx, p) {
-  const { store, CATEGORIES, options } = ctx;
-  const items = [];
-  if (options.canEditNotes) {
-    items.push({ header: 'Category' });
-    for (const c of CATEGORIES) {
-      items.push({ label: cap(c), checked: p.category === c, onClick: () => store.updatePin({ pinId: p.id, category: c }) });
-    }
-    if (p.category) items.push({ label: 'Clear category', onClick: () => store.updatePin({ pinId: p.id, category: null }) });
-  }
-  if (options.canDelete) {
-    if (items.length) items.push({ separator: true });
-    items.push({ label: 'Delete comment', icon: 'trash', danger: true, onClick: () => store.deletePin({ pinId: p.id }) });
-  }
-  return items;
-}
-
-/** DesignOS CommentTag — a small surface-3 foot chip with a category dot. */
-const CATEGORY_COLORS = {
-  spacing: 'var(--accent)', color: 'var(--component)', text: 'var(--warning)',
-  interaction: 'var(--success)', 'code-pattern': 'var(--ink-mid)', component: 'var(--component)',
-  workflow: 'var(--accent-hi)', page: 'var(--ink-lo)',
-};
-function buildCategoryTag(category) {
+/** DesignOS CommentTag — a small surface-3 foot chip with a category dot,
+ *  driven by the shared CATEGORY_META palette. */
+function buildCategoryTag(ctx, category) {
+  const meta = ctx.CATEGORY_META[category];
+  if (!meta) return el('span');
   return el('span', { class: 'comment-tag' }, [
-    el('span', { class: 'comment-tag-dot', style: `background:${CATEGORY_COLORS[category] || 'var(--ink-mid)'}` }),
-    cap(category),
+    el('span', { class: 'comment-tag-dot', style: `background:${meta.color}` }),
+    meta.label,
   ]);
 }
 
@@ -145,25 +117,7 @@ function toggleResolve(ctx, p) {
   }
 }
 
-function startNoteEdit(ctx, noteEl, p) {
-  const ta = el('textarea', { class: 'comment-note-edit' });
-  ta.value = p.note || '';
-  ta.addEventListener('click', (e) => e.stopPropagation());
-  let done = false;
-  const commit = () => { if (done) return; done = true; ctx.store.updatePin({ pinId: p.id, note: ta.value }); };
-  ta.addEventListener('blur', commit);
-  ta.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); ta.blur(); }
-    else if (e.key === 'Escape') { done = true; ctx.render(); }
-  });
-  noteEl.replaceWith(ta);
-  ta.focus();
-  ta.setSelectionRange(ta.value.length, ta.value.length);
-}
-
 // ---- Tiny presentation helpers ------------------------------------------
-
-const cap = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 function initialOf(name) {
   const s = String(name || '').trim();

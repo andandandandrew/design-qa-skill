@@ -481,8 +481,8 @@ export async function attachCapture(store, {
     };
   });
 
-  await context.exposeBinding('__designQA_createPin', async ({ page }, { viewId, x, y, note }) => {
-    const pin = await store.createPin({ viewId, x, y, note });
+  await context.exposeBinding('__designQA_createPin', async ({ page }, { viewId, x, y, note, category }) => {
+    const pin = await store.createPin({ viewId, x, y, note, category });
     viewPages.set(viewId, page);
     const view = store.findViewById(viewId);
     // Capture a chrome-hidden fullPage of the live (stable) page. Pins are NOT
@@ -496,8 +496,8 @@ export async function attachCapture(store, {
     return { pinId: pin.id };
   });
 
-  await context.exposeBinding('__designQA_updatePin', async ({ page }, { pinId, note, x, y }) => {
-    const pin = await store.updatePin({ pinId, note, x, y });
+  await context.exposeBinding('__designQA_updatePin', async ({ page }, { pinId, note, x, y, category }) => {
+    const pin = await store.updatePin({ pinId, note, x, y, category });
     // A drag changes pin coords, not page content — but refresh (debounced) in
     // case the page scrolled. Note edits don't touch the screenshot at all.
     if (typeof x === 'number' || typeof y === 'number') scheduleScreenshot(pin.viewId, page);

@@ -55,10 +55,23 @@
     // Toolbar drag position (viewport coords) — null = default bottom-center.
     toolbarPos: null,
     dragging: false,
-    // record ▾ menu open + top-indicator expanded (the latter persists Node-side
-    // so it survives navigation; render reads it whenever recording is active).
-    recMenuOpen: false,
+    // top-indicator expanded (persists Node-side so it survives navigation;
+    // render reads it whenever recording is active). `editing` = an existing
+    // pin's popover is showing the edit card (vs the default read-only card).
     recIndicatorExpanded: false,
+    editing: false,
+  };
+
+  // DesignOS canonical comment categories (app.jsx COMMENT_CATEGORIES). Inlined
+  // here because the injected script can't import the console modules; kept in
+  // lockstep with console/core.mjs + comments.mjs. Single source of truth for
+  // the category palette the browser composer / edit card tag with.
+  const COMMENT_CATEGORIES = {
+    visual:   { label: 'Visual',   color: 'oklch(0.72 0.18 295)' },
+    copy:     { label: 'Copy',     color: 'oklch(0.70 0.14 230)' },
+    spec:     { label: 'Spec',     color: 'oklch(0.72 0.16 152)' },
+    question: { label: 'Question', color: 'oklch(0.78 0.16 80)' },
+    bug:      { label: 'Bug',      color: 'oklch(0.65 0.20 25)' },
   };
 
   const TEMP_PREFIX = '__temp_';
@@ -170,8 +183,8 @@
     .tb-ibtn.active { background: var(--accent); color: var(--accent-ink); }
     .tb-ibtn svg { width: 16px; height: 16px; display: block; }
 
-    /* Record button — NEW visual states (idle = hollow ring, recording =
-       filled dot with a pulsing halo), not DesignOS's plain dot↔square. */
+    /* Record button — idle = filled red dot, recording = filled dot with a
+       pulsing halo. Plain start/stop toggle (no secondary ▾ menu). */
     .tb-rec {
       width: 30px; height: 28px;
       display: inline-flex; align-items: center; justify-content: center;
@@ -180,7 +193,7 @@
     }
     .tb-rec:hover { background: oklch(0.65 0.20 25 / 0.26); }
     .rec-glyph { display: block; box-sizing: border-box; }
-    .rec-glyph.idle { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--danger); }
+    .rec-glyph.idle { width: 11px; height: 11px; border-radius: 50%; background: var(--danger); }
     .rec-glyph.live {
       width: 10px; height: 10px; border-radius: 50%; background: var(--danger);
       animation: rec-halo 1.4s ease-in-out infinite;
@@ -189,15 +202,6 @@
       0%, 100% { box-shadow: 0 0 0 0 oklch(0.65 0.20 25 / 0.5); }
       50% { box-shadow: 0 0 0 5px oklch(0.65 0.20 25 / 0); }
     }
-    .tb-rec-chev {
-      width: 14px; height: 28px; margin-left: 1px;
-      display: inline-flex; align-items: center; justify-content: center;
-      color: var(--ink-mid); border-radius: var(--r-2); cursor: pointer;
-      transition: background 0.09s, color 0.09s;
-    }
-    .tb-rec-chev:hover, .tb-rec-chev.active { background: var(--surface-3); color: var(--ink-hi); }
-    .tb-rec-chev svg { width: 10px; height: 10px; display: block; }
-
     .tb-done {
       all: unset; cursor: pointer; height: 28px; padding: 0 12px;
       display: inline-flex; align-items: center;
@@ -205,33 +209,6 @@
       font-size: 12px; font-weight: 600; border-radius: var(--r-control);
     }
     .tb-done:hover { background: var(--accent-hi); }
-
-    /* ── DesignOS floating Menu (record ▾) ────────────────────────────── */
-    .menu {
-      position: absolute; bottom: calc(100% + 8px); right: 0;
-      min-width: 206px; padding: 4px;
-      background: var(--surface-overlay); color: var(--ink-hi);
-      border-radius: var(--r-4);
-      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
-      backdrop-filter: blur(8px);
-      display: flex; flex-direction: column; gap: 1px; z-index: 60;
-    }
-    .menu-header {
-      font-size: 10px; color: var(--ink-lo); text-transform: uppercase;
-      letter-spacing: 0.06em; padding: 6px 8px 2px;
-    }
-    .menu-item {
-      display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px;
-      border-radius: var(--r-control); cursor: pointer; color: var(--ink-hi); font-size: 12px;
-    }
-    .menu-item:hover { background: var(--surface-3); }
-    .menu-item.danger { color: var(--danger); }
-    .menu-item.danger:hover { background: var(--danger-tint); }
-    .menu-item .mi-ic { width: 16px; display: inline-flex; justify-content: center; color: var(--ink-mid); }
-    .menu-item.danger .mi-ic { color: var(--danger); }
-    .menu-item .mi-label { flex: 1; }
-    .menu-item svg { width: 14px; height: 14px; display: block; }
-    .menu-sep { height: 1px; background: var(--stroke-soft); margin: 3px 4px; }
 
     /* ── Top recording indicator (collapsed pill + expandable step list) ─ */
     /* Sits below the default top-center toolbar (top:16px + 40px tall) so the
@@ -273,11 +250,20 @@
       display: flex; align-items: center; gap: 8px; padding: 10px 12px;
       border-bottom: 1px solid var(--stroke-soft);
     }
-    .rec-ind-panel-title { font-size: 12px; font-weight: 600; color: var(--ink-hi); }
+    .rec-ind-panel-title { font-size: 12px; font-weight: 600; color: var(--ink-hi); flex: 1; }
     .rec-redact-chip {
-      margin-left: auto; padding: 1px 7px; border-radius: var(--r-pill);
+      padding: 1px 7px; border-radius: var(--r-pill);
       font-size: 10px; background: var(--accent-tint); color: var(--accent-hi); font-weight: 600;
     }
+    /* Discard recording — lives with the recording, not the start trigger. */
+    .rec-ind-discard {
+      all: unset; cursor: pointer; margin-left: 8px;
+      width: 24px; height: 24px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--ink-mid); border-radius: var(--r-2);
+    }
+    .rec-ind-discard:hover { background: var(--danger-tint); color: var(--danger); }
+    .rec-ind-discard svg { width: 14px; height: 14px; display: block; }
     .rec-ind-list { overflow-y: auto; padding: 2px 12px 12px; }
     .rec-ind-empty { padding: 30px 12px; text-align: center; color: var(--ink-lo); font-size: 12px; }
 
@@ -298,35 +284,97 @@
     .step-target strong { font-weight: 700; }
     .step-target code { font-family: var(--font-mono); font-size: 11px; background: var(--surface-2); padding: 0 4px; border-radius: var(--r-1); }
 
-    /* ── Popover / composer (pin comment editing — unchanged behavior) ──── */
+    /* ── Comment cards (composer / read / edit) — DesignOS browser-widgets ─ */
     .popover-layer { position: absolute; top: 0; left: 0; pointer-events: none; }
-    .popover {
-      position: absolute; width: 340px;
-      background: var(--surface-2); border: 1px solid var(--stroke); border-radius: var(--r-5);
-      pointer-events: auto; overflow: hidden;
-      box-shadow: var(--shadow-4);
-      transform: translate(-50%, 24px);
+    .cmt-card {
+      position: absolute;
+      background: var(--surface-1); color: var(--ink-hi);
+      border-radius: var(--r-5);
+      box-shadow: var(--shadow-4), inset 0 0 0 1px var(--stroke-soft);
+      pointer-events: auto; font-family: var(--font-sans);
+      transform: translate(22px, -10px);   /* sit to the right of the pin */
     }
-    .popover textarea {
-      all: unset; box-sizing: border-box;
-      display: block; width: 100%; min-height: 44px; max-height: 200px;
-      font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--ink);
-      background: transparent; padding: 12px 16px; resize: none;
+    .cmt-card.composer { width: 320px; padding: 12px 14px; }
+    .cmt-card.read { width: 300px; padding: 14px; display: flex; flex-direction: column; gap: 6px; }
+    .cmt-card.edit { width: 340px; }
+
+    .cmt-field {
+      all: unset; box-sizing: border-box; display: block; width: 100%;
+      font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--ink-hi);
+      background: transparent; resize: none; overflow: hidden;
+      min-height: 20px; max-height: 200px;
     }
-    .popover textarea::placeholder { color: var(--ink-lo); }
-    .popover .actions {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 6px 8px;
-      border-top: 1px solid var(--stroke);
+    .cmt-field::placeholder { color: var(--ink-lo); }
+
+    /* Footer action bar — appears once there's ≥1 char (composer) / always (edit). */
+    .cmt-bar { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+    .cmt-bar.hidden { display: none; }
+    .bar-spacer { flex: 1; }
+
+    /* Read-only card */
+    .cmt-head { display: flex; align-items: baseline; gap: 8px; }
+    .cmt-author { font-size: 13px; font-weight: 600; color: var(--ink-hi); }
+    .cmt-time { font-size: 12px; color: var(--ink-lo); flex: 1; }
+    .cmt-resolved-badge {
+      display: inline-flex; align-items: center; gap: 4px;
+      font-size: 10px; color: var(--ink-lo); background: var(--surface-2);
+      padding: 2px 6px 2px 4px; border-radius: var(--r-1);
     }
-    .popover .actions-left { display: flex; gap: 2px; }
-    .popover button.text-btn {
-      all: unset; cursor: pointer; font-size: 12px;
-      color: var(--ink-mid); padding: 6px 10px; border-radius: var(--r-2);
+    .cmt-resolved-badge svg { width: 9px; height: 9px; }
+    .cmt-read-body { font-size: 13px; color: var(--ink-hi); line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+    .cmt-card.read.resolved .cmt-read-body { color: var(--ink-lo); }
+    .cmt-tag-row { display: flex; align-items: center; margin-top: 2px; }
+
+    /* Edit card */
+    .cmt-edit-head { display: flex; align-items: center; gap: 6px; padding: 10px 12px; }
+    .cmt-edit-title { font-size: 13px; font-weight: 600; color: var(--ink-hi); flex: 1; }
+    .cmt-edit-divider { height: 1px; background: var(--stroke-soft); }
+    .cmt-edit-inset {
+      margin: 12px; background: var(--surface-2); border-radius: var(--r-4);
+      padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;
     }
-    .popover button.text-btn:hover { color: var(--ink); background: var(--surface-3); }
-    .popover button.text-btn.danger { color: var(--ink-mid); }
-    .popover button.text-btn.danger:hover { color: var(--danger); background: var(--danger-tint); }
+    .cmt-edit-inset .cmt-bar { margin-top: 0; }
+    .cmt-cancel {
+      all: unset; cursor: pointer; height: 24px; padding: 0 10px;
+      display: inline-flex; align-items: center; color: var(--ink-hi);
+      font-size: 12px; font-weight: 500; border-radius: var(--r-2);
+    }
+    .cmt-cancel:hover { background: var(--surface-3); }
+    .cmt-save {
+      all: unset; cursor: pointer; height: 24px; padding: 0 12px;
+      display: inline-flex; align-items: center;
+      background: var(--accent); color: var(--accent-ink);
+      font-size: 12px; font-weight: 600; border-radius: var(--r-2);
+    }
+    .cmt-save:hover { background: var(--accent-hi); }
+
+    /* Small icon buttons inside card heads */
+    .cmt-icon-btn {
+      all: unset; cursor: pointer; width: 24px; height: 24px;
+      display: inline-flex; align-items: center; justify-content: center;
+      color: var(--ink-mid); border-radius: var(--r-2);
+    }
+    .cmt-icon-btn:hover { background: var(--surface-3); color: var(--ink-hi); }
+    .cmt-icon-btn.danger:hover { background: var(--danger-tint); color: var(--danger); }
+    .cmt-icon-btn svg { width: 14px; height: 14px; display: block; }
+
+    /* ··· read-card overflow menu (Edit / Delete) */
+    .cmt-menu {
+      position: absolute; top: 36px; right: 10px; min-width: 144px; padding: 4px;
+      background: var(--surface-overlay); border-radius: var(--r-4);
+      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
+      backdrop-filter: blur(8px);
+      display: flex; flex-direction: column; gap: 1px; z-index: 5;
+    }
+    .cmt-menu-item { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px; border-radius: var(--r-control); cursor: pointer; color: var(--ink-hi); font-size: 12px; }
+    .cmt-menu-item:hover { background: var(--surface-3); }
+    .cmt-menu-item.danger { color: var(--danger); }
+    .cmt-menu-item.danger:hover { background: var(--danger-tint); }
+    .cmt-menu-item .mi-ic { width: 16px; display: inline-flex; justify-content: center; color: var(--ink-mid); }
+    .cmt-menu-item.danger .mi-ic { color: var(--danger); }
+    .cmt-menu-item svg { width: 14px; height: 14px; display: block; }
+
+    /* Circular send button (composer) */
     button.send-btn {
       all: unset; cursor: pointer;
       width: 28px; height: 28px; border-radius: var(--r-pill);
@@ -340,21 +388,34 @@
     button.send-btn[aria-disabled="true"] { cursor: not-allowed; }
     button.send-btn svg { width: 14px; height: 14px; display: block; }
 
-    .composer-pill {
-      position: absolute; width: 320px;
-      display: flex; align-items: center; gap: 6px;
-      background: var(--surface-3); border: 1px solid var(--stroke); border-radius: var(--r-pill);
-      padding: 4px 4px 4px 16px;
-      pointer-events: auto;
-      box-shadow: var(--shadow-3);
-      transform: translate(16px, -50%);
+    /* Category control — chip (chosen) / add button (invite) / picker dropdown */
+    .cat-control { position: relative; display: inline-flex; align-items: center; }
+    .cat-add {
+      display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 7px 0 5px;
+      color: var(--ink-mid); font-size: 11px; font-weight: 500; border-radius: var(--r-2); cursor: pointer;
     }
-    .composer-pill .pill-input {
-      all: unset; box-sizing: border-box; flex: 1; min-width: 0;
-      font-family: inherit; font-size: 13px; line-height: 1.4; color: var(--ink);
-      background: transparent; padding: 6px 0;
+    .cat-add:hover, .cat-add.open { background: var(--surface-3); color: var(--ink-hi); }
+    .cat-add svg { width: 11px; height: 11px; display: block; }
+    .cat-chip {
+      display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 4px 0 7px;
+      background: var(--surface-3); color: var(--ink-hi); font-size: 11px; font-weight: 500;
+      border-radius: var(--r-2); cursor: pointer; white-space: nowrap;
     }
-    .composer-pill .pill-input::placeholder { color: var(--ink-lo); }
+    .cat-chip-x { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-mid); border-radius: var(--r-1); }
+    .cat-chip-x:hover { color: var(--ink-hi); background: var(--surface-4); }
+    .cat-chip-x svg { width: 10px; height: 10px; display: block; }
+    .cat-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+    .cat-picker {
+      position: absolute; bottom: calc(100% + 6px); left: 0; min-width: 168px; padding: 4px;
+      background: var(--surface-overlay); border-radius: var(--r-4);
+      box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft); backdrop-filter: blur(8px);
+      display: flex; flex-direction: column; gap: 1px; z-index: 8;
+    }
+    .cat-picker-head { font-size: 10px; color: var(--ink-lo); text-transform: uppercase; letter-spacing: 0.06em; padding: 6px 8px 2px; }
+    .cat-picker-item { display: flex; align-items: center; gap: 8px; height: 26px; padding: 0 8px; border-radius: var(--r-control); cursor: pointer; color: var(--ink-hi); }
+    .cat-picker-item:hover, .cat-picker-item.active { background: var(--surface-3); }
+    .cat-picker-item .cat-picker-label { flex: 1; }
+    .cat-picker-item svg { width: 11px; height: 11px; display: block; }
 
     /* Modal (Done / Discard confirms — native confirm() is auto-dismissed by
        Playwright, so we use a shadow-DOM modal). */
@@ -426,11 +487,11 @@
   // Filled-dot grip (lucide grip-vertical, filled for a crisper drag handle).
   const ICON_GRIP =
     '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="9" cy="5" r="1.4"/><circle cx="9" cy="12" r="1.4"/><circle cx="9" cy="19" r="1.4"/><circle cx="15" cy="5" r="1.4"/><circle cx="15" cy="12" r="1.4"/><circle cx="15" cy="19" r="1.4"/></svg>';
-  // Menu glyphs
-  const ICON_RECORD = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="12" cy="12" r="5"/></svg>';
-  const ICON_SQUARE = ic('<rect width="13" height="13" x="5.5" y="5.5" rx="2"/>', 2);
-  const ICON_ROTATE = ic('<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>');
+  // Card / menu glyphs
   const ICON_TRASH = ic('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>');
+  const ICON_MORE = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
+  const ICON_CHECK = ic('<path d="M20 6 9 17l-5-5"/>', 2.2);
+  const ICON_PENCIL = ic('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>');
 
   // ------- Toolbar ------------------------------------------------------
 
@@ -441,14 +502,11 @@
     <span class="tb-divider"></span>
     <span class="tb-cluster">
       <span class="tb-ibtn" id="commentBtn" title="Comment — click, then click on the page">${ICON_COMMENT}</span>
-      <span class="tb-ibtn" id="newScreenBtn" title="Save this screen and start a fresh one on this URL">${ICON_PLUS}</span>
+      <span class="tb-ibtn" id="newScreenBtn" title="New screen — seal this screen's comments and start a fresh, separate set of pins on this page">${ICON_PLUS}</span>
     </span>
     <span class="tb-divider"></span>
     <span class="tb-cluster">
-      <span class="tb-rec-wrap" id="recWrap">
-        <span class="tb-rec" id="recBtn" title="Start recording the path the engineer will replay"><span class="rec-glyph idle"></span></span>
-        <span class="tb-rec-chev" id="recChevBtn" title="Recording options">${ICON_CHEV_DOWN}</span>
-      </span>
+      <span class="tb-rec" id="recBtn" title="Start recording the path the engineer will replay"><span class="rec-glyph idle"></span></span>
       <button class="tb-done" id="doneBtn" title="Finish the review — seal this screen, lock the recorded path; continue in the console">Done</button>
     </span>
   `;
@@ -501,7 +559,11 @@
     try {
       const { view } = await window.__designQA_loadForUrl({ url: location.href });
       if (view && view.id === STATE.viewId) {
-        STATE.pins = view.pins.map((p) => ({ id: p.id, x: p.x, y: p.y, note: p.note }));
+        STATE.pins = view.pins.map((p) => ({
+          id: p.id, x: p.x, y: p.y, note: p.note,
+          category: p.category ?? null, author: p.author ?? null,
+          status: p.status ?? 'open', createdAt: p.createdAt ?? null,
+        }));
         logPins('reload');
         renderPins();
       }
@@ -645,154 +707,270 @@
     });
   }
 
+  // ------- Category control (shared by composer + edit card) ------------
+
+  /** Self-contained category chip / "+ Category" button + dropdown picker.
+   *  getCat() reads the current value; setCat(keyOrNull) fires on change (the
+   *  caller decides when to persist). Owns its own open/closed + re-render. */
+  function buildCategoryControl(getCat, setCat) {
+    const wrap = document.createElement('span');
+    wrap.className = 'cat-control';
+    let open = false;
+    function paint() {
+      const key = getCat();
+      const meta = key ? COMMENT_CATEGORIES[key] : null;
+      wrap.innerHTML = meta
+        ? `<span class="cat-chip" data-act="toggle"><span class="cat-dot" style="background:${meta.color}"></span><span>${escapeHtml(meta.label)}</span><span class="cat-chip-x" data-act="clear" title="Remove category">${ICON_X}</span></span>`
+        : `<span class="cat-add ${open ? 'open' : ''}" data-act="toggle">${ICON_PLUS}<span>Category</span></span>`;
+      if (open) {
+        const picker = document.createElement('div');
+        picker.className = 'cat-picker';
+        picker.innerHTML = `<div class="cat-picker-head">Category</div>` +
+          Object.entries(COMMENT_CATEGORIES).map(([k, m]) =>
+            `<span class="cat-picker-item ${k === key ? 'active' : ''}" data-cat="${k}"><span class="cat-dot" style="background:${m.color}"></span><span class="cat-picker-label">${escapeHtml(m.label)}</span>${k === key ? ICON_CHECK : ''}</span>`).join('');
+        wrap.appendChild(picker);
+      }
+    }
+    wrap.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const item = e.target.closest('[data-cat]');
+      if (item) { setCat(item.dataset.cat); open = false; paint(); return; }
+      if (e.target.closest('[data-act="clear"]')) { setCat(null); open = false; paint(); return; }
+      if (e.target.closest('[data-act="toggle"]')) { open = !open; paint(); return; }
+    });
+    paint();
+    return wrap;
+  }
+
+  // ------- Render: comment popover (composer / read / edit) -------------
+
+  function autoGrow(ta) { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 200) + 'px'; }
+
+  function relTime(iso) {
+    if (!iso) return 'Just now';
+    const t = new Date(iso).getTime();
+    if (Number.isNaN(t)) return '';
+    const m = Math.floor((Date.now() - t) / 60000);
+    if (m < 1) return 'Just now';
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    if (d < 7) return `${d}d ago`;
+    return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  /** Dispatch on pin kind + edit flag: temp → composer, existing → read card
+   *  (default) or edit card (when the user opted in via the ··· menu). */
   function renderPopover() {
     popoverLayer.innerHTML = '';
-    if (!STATE.activePinId) return;
+    if (!STATE.activePinId) { STATE.editing = false; return; }
     const pin = STATE.pins.find((p) => p.id === STATE.activePinId);
-    if (!pin) return;
-    const isTemp = String(pin.id).startsWith(TEMP_PREFIX);
+    if (!pin) { STATE.editing = false; return; }
+    if (String(pin.id).startsWith(TEMP_PREFIX)) { renderComposer(pin); return; }
+    if (STATE.editing) { renderEditCard(pin); return; }
+    renderReadCard(pin);
+  }
 
-    const pop = document.createElement('div');
+  function placeCard(pop, pin) {
     pop.style.left = pin.x + 'px';
-    pop.style.top = pin.y + 'px';
-    if (isTemp) {
-      pop.className = 'composer-pill';
-      pop.innerHTML = `
-        <input type="text" class="pill-input" placeholder="Add a comment" />
-        <button class="send-btn" data-act="send" aria-disabled="true" title="Send">${ICON_ARROW_UP}</button>
-      `;
-    } else {
-      pop.className = 'popover';
-      pop.innerHTML = `
-        <textarea placeholder="Add a comment" rows="2"></textarea>
-        <div class="actions">
-          <div class="actions-left">
-            <button class="text-btn danger" data-act="delete">Delete</button>
-          </div>
-          <button class="send-btn" data-act="send" aria-disabled="true" title="Send">${ICON_ARROW_UP}</button>
-        </div>
-      `;
-    }
+    pop.style.top = (pin.y - 24) + 'px'; // align card top with the pin bubble top
     popoverLayer.appendChild(pop);
-    const ta = pop.querySelector('textarea') || pop.querySelector('.pill-input');
+  }
+
+  // New comment — DesignOS FxPinComposer. The footer (category + send) reveals
+  // once there's ≥1 character; before that it's a bare growing field.
+  function renderComposer(pin) {
+    let draftCategory = pin.category || null;
+    const pop = document.createElement('div');
+    pop.className = 'cmt-card composer';
+    pop.innerHTML = `
+      <textarea class="cmt-field" placeholder="Add a comment…" rows="1"></textarea>
+      <div class="cmt-bar hidden">
+        <span class="cat-slot"></span>
+        <span class="bar-spacer"></span>
+        <button class="send-btn" data-act="send" aria-disabled="true" title="Send">${ICON_ARROW_UP}</button>
+      </div>`;
+    placeCard(pop, pin);
+    const ta = pop.querySelector('.cmt-field');
+    const bar = pop.querySelector('.cmt-bar');
     const sendBtn = pop.querySelector('.send-btn');
+    pop.querySelector('.cat-slot').appendChild(
+      buildCategoryControl(() => draftCategory, (c) => { draftCategory = c; }));
     ta.value = pin.note || '';
+    autoGrow(ta);
     ta.focus();
     ta.setSelectionRange(ta.value.length, ta.value.length);
 
-    function updateSendState() {
+    const sync = () => {
       const hasText = ta.value.trim().length > 0;
+      bar.classList.toggle('hidden', !hasText);
       sendBtn.classList.toggle('active', hasText);
       sendBtn.setAttribute('aria-disabled', hasText ? 'false' : 'true');
-    }
-    updateSendState();
+    };
+    sync();
+    const send = () => { if (ta.value.trim()) commitTempPin(pin, ta.value, draftCategory); };
+    ta.addEventListener('input', () => { autoGrow(ta); sync(); });
+    ta.addEventListener('keydown', (e) => {
+      if ((e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) { e.preventDefault(); send(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); closePopoverIfOpen(); }
+    });
+    sendBtn.addEventListener('click', () => { if (sendBtn.getAttribute('aria-disabled') !== 'true') send(); });
+  }
 
-    let saveTimer = null;
-    const persistExisting = async () => {
+  // Existing comment, default view — DesignOS FxCommentRead (read-only). Edit is
+  // an explicit affordance via the ··· menu; resolved pins read muted + badged.
+  function renderReadCard(pin) {
+    const resolved = pin.status === 'resolved';
+    const meta = pin.category ? COMMENT_CATEGORIES[pin.category] : null;
+    const pop = document.createElement('div');
+    pop.className = 'cmt-card read' + (resolved ? ' resolved' : '');
+    pop.innerHTML = `
+      <div class="cmt-head">
+        <span class="cmt-author">${escapeHtml(pin.author || 'You')}</span>
+        <span class="cmt-time">${escapeHtml(relTime(pin.createdAt))}</span>
+        ${resolved ? `<span class="cmt-resolved-badge">${ICON_CHECK}Resolved</span>` : ''}
+        <button class="cmt-icon-btn" data-act="more" title="More">${ICON_MORE}</button>
+      </div>
+      <div class="cmt-read-body">${escapeHtml(pin.note || '')}</div>
+      ${meta ? `<div class="cmt-tag-row"><span class="cat-chip" style="cursor:default"><span class="cat-dot" style="background:${resolved ? 'var(--ink-mid)' : meta.color}"></span><span>${escapeHtml(meta.label)}</span></span></div>` : ''}`;
+    placeCard(pop, pin);
+    pop.querySelector('[data-act="more"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openReadMenu(pop, pin);
+    });
+  }
+
+  function openReadMenu(pop, pin) {
+    pop.querySelector('.cmt-menu')?.remove();
+    const menu = document.createElement('div');
+    menu.className = 'cmt-menu';
+    menu.innerHTML = `
+      <div class="cmt-menu-item" data-act="edit"><span class="mi-ic">${ICON_PENCIL}</span><span>Edit</span></div>
+      <div class="cmt-menu-item danger" data-act="del"><span class="mi-ic">${ICON_TRASH}</span><span>Delete</span></div>`;
+    menu.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const act = e.target.closest('[data-act]')?.dataset.act;
+      if (act === 'edit') { STATE.editing = true; renderPopover(); }
+      else if (act === 'del') deletePinById(pin);
+    });
+    pop.appendChild(menu);
+  }
+
+  // Existing comment, editing — DesignOS FxCommentEdit. Save persists note +
+  // category and returns to the read card; Cancel reverts without persisting.
+  function renderEditCard(pin) {
+    let draftCategory = pin.category || null;
+    const pop = document.createElement('div');
+    pop.className = 'cmt-card edit';
+    pop.innerHTML = `
+      <div class="cmt-edit-head">
+        <span class="cmt-edit-title">Comment</span>
+        <button class="cmt-icon-btn danger" data-act="del" title="Delete">${ICON_TRASH}</button>
+        <button class="cmt-icon-btn" data-act="cancel" title="Cancel">${ICON_X}</button>
+      </div>
+      <div class="cmt-edit-divider"></div>
+      <div class="cmt-edit-inset">
+        <textarea class="cmt-field" placeholder="Add a comment…" rows="2"></textarea>
+        <div class="cmt-bar">
+          <span class="cat-slot"></span>
+          <span class="bar-spacer"></span>
+          <button class="cmt-cancel" data-act="cancel">Cancel</button>
+          <button class="cmt-save" data-act="save">Save</button>
+        </div>
+      </div>`;
+    placeCard(pop, pin);
+    const ta = pop.querySelector('.cmt-field');
+    pop.querySelector('.cat-slot').appendChild(
+      buildCategoryControl(() => draftCategory, (c) => { draftCategory = c; }));
+    ta.value = pin.note || '';
+    autoGrow(ta);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    ta.addEventListener('input', () => autoGrow(ta));
+
+    const save = async () => {
       pin.note = ta.value;
-      try { await window.__designQA_updatePin({ pinId: pin.id, note: pin.note }); }
+      pin.category = draftCategory || null;
+      STATE.editing = false;
+      renderPins();
+      renderPopover();
+      try { await window.__designQA_updatePin({ pinId: pin.id, note: pin.note, category: draftCategory ?? null }); }
       catch (e) { console.warn('design-qa: updatePin failed', e); }
     };
-
-    const commit = async () => {
-      const text = ta.value.trim();
-      if (!text) return;
-      if (isTemp) {
-        const tempIdVal = pin.id;
-        // Lazy-create the view so dismissed temp pins don't leave empty screens.
-        let createdNewView = false;
-        if (!STATE.viewId) {
-          try {
-            const result = await window.__designQA_ensureView({
-              url: location.href,
-              title: document.title || location.href,
-              viewport: { width: window.innerWidth, height: window.innerHeight },
-            });
-            STATE.viewId = result.viewId;
-            createdNewView = !!result.isNew;
-          } catch (e) {
-            console.warn('design-qa: ensureView failed', e);
-            STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
-            STATE.activePinId = null;
-            renderPins();
-            renderPopover();
-            return;
-          }
-        }
-        try {
-          const { pinId } = await window.__designQA_createPin({
-            viewId: STATE.viewId, x: pin.x, y: pin.y, note: ta.value,
-          });
-          // Promote the captured temp pin object in place (robust to STATE.pins
-          // being mutated during the await).
-          pin.id = pinId;
-          pin.note = ta.value;
-          if (!STATE.pins.includes(pin)) STATE.pins.push(pin);
-          logPins('commit-swap');
-          if (createdNewView) {
-            toast(`Started screen for ${truncate(document.title || location.href, 48)}`);
-          }
-        } catch (e) {
-          console.warn('design-qa: createPin failed', e);
-          STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
-        }
-      } else {
-        if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-        await persistExisting();
-      }
-      STATE.activePinId = null;
-      renderPins();
-      renderPopover();
-      // Reconcile canvas against the daemon's authoritative pin set.
-      await reloadActiveViewPins();
-    };
-
-    const discardOrClose = () => {
-      if (saveTimer) { clearTimeout(saveTimer); saveTimer = null; }
-      if (isTemp) {
-        STATE.pins = STATE.pins.filter((p) => p.id !== pin.id);
-      } else if (ta.value !== (pin.note || '')) {
-        persistExisting();
-      }
-      STATE.activePinId = null;
-      renderPins();
-      renderPopover();
-    };
-
-    ta.addEventListener('input', () => {
-      updateSendState();
-      if (isTemp) return; // don't auto-save until user explicitly Sends
-      pin.note = ta.value;
-      if (saveTimer) clearTimeout(saveTimer);
-      saveTimer = setTimeout(persistExisting, 600);
-    });
+    const cancel = () => { STATE.editing = false; renderPopover(); };
 
     ta.addEventListener('keydown', (e) => {
-      const isCommit = (e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter');
-      if (isCommit) { e.preventDefault(); commit(); return; }
-      if (e.key === 'Escape') { e.preventDefault(); discardOrClose(); }
+      if ((e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) { e.preventDefault(); save(); return; }
+      if (e.key === 'Escape') { e.preventDefault(); cancel(); }
     });
+    pop.querySelector('[data-act="save"]').addEventListener('click', save);
+    pop.querySelectorAll('[data-act="cancel"]').forEach((b) => b.addEventListener('click', cancel));
+    pop.querySelector('[data-act="del"]').addEventListener('click', () => deletePinById(pin));
+  }
 
-    sendBtn.addEventListener('click', () => {
-      if (sendBtn.getAttribute('aria-disabled') === 'true') return;
-      commit();
-    });
-
-    pop.querySelector('[data-act="delete"]')?.addEventListener('click', async () => {
-      const pinIdToDelete = pin.id;
-      STATE.pins = STATE.pins.filter((p) => p.id !== pinIdToDelete);
-      STATE.activePinId = null;
-      renderPins();
-      renderPopover();
+  // Create the server-side pin from a temp draft (lazy-creating the view on the
+  // first comment so dismissed drafts don't leave empty screens).
+  async function commitTempPin(pin, note, category) {
+    const tempIdVal = pin.id;
+    let createdNewView = false;
+    if (!STATE.viewId) {
       try {
-        await window.__designQA_deletePin({ pinId: pinIdToDelete });
-        toast('Comment deleted');
+        const result = await window.__designQA_ensureView({
+          url: location.href,
+          title: document.title || location.href,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        });
+        STATE.viewId = result.viewId;
+        createdNewView = !!result.isNew;
       } catch (e) {
-        console.warn('design-qa: deletePin failed', e);
-        STATE.pins.push({ ...pin });
+        console.warn('design-qa: ensureView failed', e);
+        STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
+        STATE.activePinId = null;
         renderPins();
+        renderPopover();
+        return;
       }
-    });
+    }
+    try {
+      const { pinId } = await window.__designQA_createPin({
+        viewId: STATE.viewId, x: pin.x, y: pin.y, note, category: category || null,
+      });
+      // Promote the captured temp pin object in place (robust to STATE.pins
+      // being mutated during the await).
+      pin.id = pinId;
+      pin.note = note;
+      pin.category = category || null;
+      if (!STATE.pins.includes(pin)) STATE.pins.push(pin);
+      logPins('commit-swap');
+      if (createdNewView) toast(`Started screen for ${truncate(document.title || location.href, 48)}`);
+    } catch (e) {
+      console.warn('design-qa: createPin failed', e);
+      STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
+    }
+    STATE.activePinId = null;
+    STATE.editing = false;
+    renderPins();
+    renderPopover();
+    // Reconcile canvas against the daemon's authoritative pin set.
+    await reloadActiveViewPins();
+  }
+
+  async function deletePinById(pin) {
+    const pinId = pin.id;
+    STATE.pins = STATE.pins.filter((p) => p.id !== pinId);
+    STATE.activePinId = null;
+    STATE.editing = false;
+    renderPins();
+    renderPopover();
+    try {
+      await window.__designQA_deletePin({ pinId });
+      toast('Comment deleted');
+    } catch (e) {
+      console.warn('design-qa: deletePin failed', e);
+      STATE.pins.push({ ...pin });
+      renderPins();
+    }
   }
 
   function closePopoverIfOpen() {
@@ -804,24 +982,44 @@
       logPins('closePopover-discard-temp');
     }
     STATE.activePinId = null;
+    STATE.editing = false;
     renderPins();
     renderPopover();
   }
 
-  // Click outside the popover (and outside any pin) closes it. composedPath so
-  // we can see into our shadow DOM.
+  // Click outside our UI closes the card. The shadow root is CLOSED, so a
+  // document-level composedPath() can't see our internals (it would report
+  // every in-card click — the ··· menu, the + Category button — as "outside").
+  // But every click that lands inside the shadow retargets to the host, so
+  // `e.target === host` is the reliable "click was inside our UI" test. Pin
+  // clicks never reach here: the pin's pointerdown preventDefault suppresses
+  // the synthetic click.
   document.addEventListener('click', (e) => {
     if (!STATE.activePinId) return;
-    const path = e.composedPath?.() || [];
-    for (const node of path) {
-      if (!node || !node.classList) continue;
-      if (node.classList.contains('pin') || node.classList.contains('popover') || node.classList.contains('composer-pill')) return;
-    }
+    if (e.target === host) return; // inside our shadow UI — let it handle itself
     logPins('click-outside-close');
     closePopoverIfOpen();
   }, true);
 
   // ------- New screen (＋) ----------------------------------------------
+
+  // ＋ is a screen *boundary*, not a quick add — it seals the comments you've
+  // placed so far and opens a fresh, separate set on this same URL. Because the
+  // browser can no longer name the screen inline, gate it behind a confirm (the
+  // same modal vocabulary as Done) so the consequence is explicit.
+  async function requestNewScreen() {
+    const realPins = STATE.pins.filter((p) => !String(p.id).startsWith(TEMP_PREFIX));
+    const seals = realPins.length
+      ? `This seals the current screen (${realPins.length} comment${realPins.length === 1 ? '' : 's'}) and`
+      : 'This';
+    const ok = await confirmModal({
+      title: 'Start a new screen?',
+      body: `${seals} begins a separate set of comments on this page. You can rename it in the console.`,
+      confirmLabel: 'New screen',
+    });
+    if (!ok) return;
+    startNewScreenHere();
+  }
 
   async function startNewScreenHere() {
     let result;
@@ -830,9 +1028,10 @@
     STATE.viewId = result.newViewId;
     STATE.pins = [];
     STATE.activePinId = null;
+    STATE.editing = false;
     renderPins();
     renderPopover();
-    toast('New screen — name it in the console');
+    toast('New screen started — rename it in the console');
   }
 
   // ------- Done (session-level finalize-keep, 9f) -----------------------
@@ -874,7 +1073,10 @@
     toast('Done — recording locked; continue any edits in the console');
   }
 
-  // ------- Record button + ▾ menu ---------------------------------------
+  // ------- Record button (start/stop toggle) ----------------------------
+  // No secondary ▾ menu: the button just toggles start ↔ stop (finalize-keep).
+  // Discard lives in the recording indicator (it's about the recording, not the
+  // start trigger); Reset-start-here was dropped.
 
   function renderRecButton() {
     const btn = $('recBtn');
@@ -885,7 +1087,6 @@
   }
 
   async function onRecToggle() {
-    closeRecMenu();
     if (STATE.recorder.active) {
       try { await window.__designQA_stopRecording(); }
       catch (err) { console.warn('design-qa: finalize recording failed', err); }
@@ -896,69 +1097,17 @@
     // The state push from Node flips the visuals; no manual update needed.
   }
 
-  function closeRecMenu() {
-    if (!STATE.recMenuOpen) return;
-    STATE.recMenuOpen = false;
-    const existing = $('recMenu');
-    if (existing) existing.remove();
-    $('recChevBtn')?.classList.remove('active');
-  }
-
-  function toggleRecMenu() {
-    if (STATE.recMenuOpen) { closeRecMenu(); return; }
-    STATE.recMenuOpen = true;
-    $('recChevBtn')?.classList.add('active');
-    const wrap = $('recWrap');
-    if (!wrap) return;
-    const menu = document.createElement('div');
-    menu.className = 'menu';
-    menu.id = 'recMenu';
-    if (STATE.recorder.active) {
-      menu.innerHTML = `
-        <div class="menu-header">Recording</div>
-        <div class="menu-item" data-act="reset"><span class="mi-ic">${ICON_ROTATE}</span><span class="mi-label">Reset start here</span></div>
-        <div class="menu-item" data-act="stop"><span class="mi-ic">${ICON_SQUARE}</span><span class="mi-label">Stop recording</span></div>
-        <div class="menu-sep"></div>
-        <div class="menu-item danger" data-act="discard"><span class="mi-ic">${ICON_TRASH}</span><span class="mi-label">Discard recording</span></div>
-      `;
-    } else {
-      menu.innerHTML = `
-        <div class="menu-header">Record</div>
-        <div class="menu-item" data-act="start"><span class="mi-ic">${ICON_RECORD}</span><span class="mi-label">Start recording</span></div>
-      `;
-    }
-    wrap.appendChild(menu);
-  }
-
-  async function onRecMenuItem(act) {
-    closeRecMenu();
-    if (act === 'start') {
-      try { await window.__designQA_markStart(); }
-      catch (err) { console.warn('design-qa: markStart failed', err); }
-      return;
-    }
-    if (act === 'reset') {
-      try { await window.__designQA_markStart(); }
-      catch (err) { console.warn('design-qa: markStart (reset) failed', err); }
-      toast('Recording start moved to here');
-      return;
-    }
-    if (act === 'stop') {
-      try { await window.__designQA_stopRecording(); }
-      catch (err) { console.warn('design-qa: finalize recording failed', err); }
-      return;
-    }
-    if (act === 'discard') {
-      const ok = await confirmModal({
-        title: 'Discard recording?',
-        body: 'The recorded path will be cleared. Captured steps move to preconditions as hints. This can’t be undone here.',
-        confirmLabel: 'Discard',
-        danger: true,
-      });
-      if (!ok) return;
-      try { await window.__designQA_discardRecording(); }
-      catch (err) { console.warn('design-qa: discardRecording failed', err); }
-    }
+  // Discard the in-progress recording from the indicator (confirm first).
+  async function discardRecording() {
+    const ok = await confirmModal({
+      title: 'Discard recording?',
+      body: 'The recorded path will be cleared. Captured steps move to preconditions as hints. This can’t be undone here.',
+      confirmLabel: 'Discard',
+      danger: true,
+    });
+    if (!ok) return;
+    try { await window.__designQA_discardRecording(); }
+    catch (err) { console.warn('design-qa: discardRecording failed', err); }
   }
 
   // ------- Top recording indicator --------------------------------------
@@ -1033,6 +1182,7 @@
         <div class="rec-ind-panel-head">
           <span class="rec-ind-panel-title">Recorded path</span>
           ${redactChip}
+          <button class="rec-ind-discard" data-act="ind-discard" title="Discard recording">${ICON_TRASH}</button>
         </div>
         <div class="rec-ind-list" id="recIndList"><div class="rec-ind-empty">Loading…</div></div>
       </div>` : ''}
@@ -1068,7 +1218,6 @@
   // Node → shadow push setter, called via page.evaluate from capture.mjs.
   window.__designQA_setRecorderState = (state) => {
     if (!state || typeof state !== 'object') return;
-    const wasActive = STATE.recorder.active;
     STATE.recorder = {
       active: !!state.active,
       count: Number.isFinite(state.count) ? state.count : 0,
@@ -1076,8 +1225,6 @@
       redactionCount: Number.isFinite(state.redactionCount) ? state.redactionCount : 0,
     };
     renderRecButton();
-    // Recording stopped → tidy up the record menu so it doesn't show stale items.
-    if (wasActive && !STATE.recorder.active && STATE.recMenuOpen) closeRecMenu();
     renderRecIndicator();
   };
 
@@ -1117,8 +1264,9 @@
     // Render a temp pin locally + open the composer. Neither the view nor the
     // pin is created server-side until the user sends non-empty text.
     const tId = tempId();
-    STATE.pins.push({ id: tId, x, y, note: '' });
+    STATE.pins.push({ id: tId, x, y, note: '', category: null });
     STATE.activePinId = tId;
+    STATE.editing = false;
     renderPins();
     renderPopover();
   }
@@ -1156,7 +1304,6 @@
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    closeRecMenu();
     const grip = e.currentTarget;
     const r = toolbar.getBoundingClientRect();
     dragRef = { dx: e.clientX - r.left, dy: e.clientY - r.top, w: r.width, h: r.height, grip, pointerId: e.pointerId };
@@ -1256,40 +1403,19 @@
 
   toolbar.addEventListener('click', (e) => {
     const id = e.target?.closest?.('[id]')?.id;
-    if (id === 'commentBtn') { closeRecMenu(); setPlacementMode(!STATE.placementMode); return; }
-    if (id === 'newScreenBtn') { closeRecMenu(); startNewScreenHere(); return; }
+    if (id === 'commentBtn') { setPlacementMode(!STATE.placementMode); return; }
+    if (id === 'newScreenBtn') { requestNewScreen(); return; }
     if (id === 'recBtn') { onRecToggle(); return; }
-    if (id === 'recChevBtn') { toggleRecMenu(); return; }
-    if (id === 'doneBtn') { closeRecMenu(); requestDone(); return; }
-  });
-
-  // Record-menu item clicks (the menu lives inside the toolbar, so delegate here).
-  toolbar.addEventListener('click', (e) => {
-    const item = e.target?.closest?.('.menu-item');
-    if (item && item.dataset.act) onRecMenuItem(item.dataset.act);
+    if (id === 'doneBtn') { requestDone(); return; }
   });
 
   // Indicator clicks live in `chrome` (sibling of toolbar) — wire separately.
+  // The Discard action sits inside the expanded panel; intercept it before the
+  // pill-toggle so opening the menu doesn't also collapse the indicator.
   chrome.addEventListener('click', (e) => {
+    if (e.target?.closest?.('[data-act="ind-discard"]')) { e.stopPropagation(); discardRecording(); return; }
     if (recIndicatorEl && e.target?.closest?.('#recIndPill')) toggleRecIndicator();
   });
-
-  // Click outside the record menu closes it (composedPath sees into shadow DOM).
-  document.addEventListener('click', (e) => {
-    if (!STATE.recMenuOpen) return;
-    const path = e.composedPath?.() || [];
-    for (const node of path) {
-      if (!node || !node.classList) continue;
-      if (node.classList.contains('menu') || node.id === 'recChevBtn') return;
-    }
-    closeRecMenu();
-  }, true);
-
-  // Esc closes the record menu / collapses the indicator (when not in a deeper mode).
-  window.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape') return;
-    if (STATE.recMenuOpen) { closeRecMenu(); return; }
-  }, false);
 
   // Keep an explicitly-positioned toolbar on-screen across viewport resizes.
   window.addEventListener('resize', () => {
