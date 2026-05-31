@@ -97,6 +97,38 @@ test('sealView normalizes pathsPx → %-shape (centroid, bounds, RDP, drop paths
   }
 });
 
+test('createDrawingPct (console authoring) builds a %-shape directly, no seal', async () => {
+  const { store } = await freshStore();
+  // A sealed/manual-style view — console drawings author against frozen images.
+  const view = await store.createView({ url: 'https://x/', title: 'X', viewport: { width: 1280, height: 800 } });
+  // One stroke with collinear interior points already in %-of-image coords.
+  const rec = await store.createDrawingPct({
+    viewId: view.id,
+    paths: [[[10, 10], [20, 20], [30, 30], [40, 40]]],
+    note: '  circle this  ',
+  });
+  assert.equal(rec.type, 'drawing');
+  assert.equal(rec.note, 'circle this');
+  assert.equal(rec.pathsPx, undefined, 'console drawing is born canonical — no working px');
+  assert.equal(rec.shape.kind, 'path');
+  assert.equal(rec.shape.paths[0].length, 2, 'RDP collapses the collinear run');
+  // Coords pass through unchanged (already %), bounds + centroid derived.
+  assert.deepEqual(rec.shape.paths[0], [[10, 10], [40, 40]]);
+  assert.ok(Math.abs(rec.shape.bounds.wPct - 30) < 0.01);
+  assert.ok(Math.abs(rec.xPct - 25) < 0.01 && Math.abs(rec.yPct - 25) < 0.01, 'centroid = bbox centre');
+});
+
+test('createDrawingPct requires a note and a non-empty stroke', async () => {
+  const { store } = await freshStore();
+  const view = await store.createView({ url: 'https://x/', title: 'X', viewport: { width: 1280, height: 800 } });
+  await assert.rejects(
+    () => store.createDrawingPct({ viewId: view.id, paths: [[[1, 1], [2, 2]]], note: '   ' }),
+    /requires a note/);
+  await assert.rejects(
+    () => store.createDrawingPct({ viewId: view.id, paths: [[]], note: 'hi' }),
+    /at least one non-empty stroke/);
+});
+
 test('a text pin still seals to a point (drawing branch does not interfere)', async () => {
   const { store, sessionDir } = await freshStore();
   const view = await store.createView({ url: 'https://x/', title: 'X', viewport: { width: 1280, height: 800 } });

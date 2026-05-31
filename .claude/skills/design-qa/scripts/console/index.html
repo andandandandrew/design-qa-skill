@@ -50,13 +50,17 @@
     <!-- ░░ CENTER — canvas ░░ -->
     <main class="canvas-pane">
       <div class="canvas dotgrid" id="canvas"></div>
-      <!-- Floating QA-verb cluster (DesignOS bottom-toolbar idiom, adapted). -->
+      <!-- Floating QA-verb cluster — DesignOS bottom-toolbar idiom: icon-only
+           28px tools with hover tooltip chips, active tool = accent fill. -->
       <div class="canvas-cluster" id="canvasCluster">
-        <button class="cluster-btn" id="addPinBtn" title="Add a comment pin">
-          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span class="cluster-btn-label">Add pin</span>
+        <button class="cluster-tool" id="addPinBtn" aria-label="Comment">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span class="cluster-tip">Comment</span>
         </button>
-        <span class="cluster-hint" id="canvasHint">Click a pin to read it.</span>
+        <button class="cluster-tool" id="drawBtn" aria-label="Draw">
+          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+          <span class="cluster-tip">Draw</span>
+        </button>
       </div>
     </main>
 

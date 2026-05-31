@@ -557,6 +557,49 @@ export class SessionStore {
     return pin;
   }
 
+  /**
+   * Create a drawing feedback record from %-of-image strokes (console preview
+   * authoring — Spike 11 on a frozen screenshot). Unlike the live-browser
+   * createDrawing (px → %-shape at seal), a console drawing is born canonical:
+   * the screenshot IS the coordinate space, so `paths` arrive as %-points and
+   * the shape is built directly (RDP-simplified, bbox-centre xPct/yPct), no
+   * seal step. Works on sealed/manual views, like createPinPct. Note REQUIRED.
+   */
+  async createDrawingPct({ viewId, paths, note, category = null, author }) {
+    const view = this.findViewById(viewId);
+    if (!view) throw new Error(`view ${viewId} not found`);
+    if (!Array.isArray(paths) || !paths.some((s) => Array.isArray(s) && s.length)) {
+      throw new Error('drawing requires at least one non-empty stroke');
+    }
+    const trimmedNote = typeof note === 'string' ? note.trim() : '';
+    if (!trimmedNote) throw new Error('drawing requires a note');
+    const simplified = [];
+    for (const stroke of paths) {
+      if (!Array.isArray(stroke) || stroke.length === 0) continue;
+      const pts = stroke.map(([x, y]) => [clampPct(x), clampPct(y)]);
+      simplified.push(rdpSimplify(pts, RDP_EPSILON_PCT).map(([x, y]) => [round3(x), round3(y)]));
+    }
+    const bounds = boundsOfPaths(simplified);
+    const stampedAuthor = author ?? this.doc.author?.name ?? null;
+    const pin = {
+      id: newId('pin'),
+      viewId,
+      type: 'drawing',
+      shape: { kind: 'path', paths: simplified, bounds, strokeWidth: DRAWING_STROKE_WIDTH, color: DRAWING_COLOR },
+      xPct: clampPct(bounds.xPct + bounds.wPct / 2),
+      yPct: clampPct(bounds.yPct + bounds.hPct / 2),
+      note: trimmedNote,
+      category,
+      author: stampedAuthor,
+      status: 'open',
+      resolvedNote: null,
+      createdAt: new Date().toISOString(),
+    };
+    view.pins.push(pin);
+    await this.persist();
+    return pin;
+  }
+
   async movePinPct({ pinId, xPct, yPct }) {
     const { pin } = this.findPin(pinId);
     if (!pin) throw new Error(`pin ${pinId} not found`);

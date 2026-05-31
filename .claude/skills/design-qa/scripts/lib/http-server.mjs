@@ -40,6 +40,7 @@ const MIME = {
 // op name (matches the HttpStore method) → SessionStore method.
 const CONSOLE_OPS = {
   createPin: 'createPinPct',
+  createDrawing: 'createDrawingPct', // console preview drawing authoring (Spike 11, %-paths)
   movePin: 'movePinPct',
   updatePin: 'editPin',
   resolvePin: 'resolvePin',
@@ -61,7 +62,7 @@ const CONSOLE_OPS = {
  *  apply (no live-browser-owned screens hold authored step text). */
 const STEP_OPS = new Set(['editStepText', 'omitStep', 'unomitStep', 'setRecordingStartAt']);
 // Ops keyed by viewId (not pinId) — resolved via findViewById for the guard.
-const VIEW_ID_OPS = new Set(['createPin', 'deleteView']);
+const VIEW_ID_OPS = new Set(['createPin', 'createDrawing', 'deleteView']);
 
 export async function startHttpServer(store, { sessionDir, consoleDir, log = () => {} }) {
   const subs = sessionSubPaths(sessionDir);

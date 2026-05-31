@@ -45,6 +45,7 @@ export function createApp({ store, mounts, options = {} }) {
     activeViewId: store.session.views[0]?.id || null,
     activePinId: null,
     placeMode: false,
+    drawMode: false, // freehand drawing on the frozen screenshot (Spike 11, console)
     composer: null, // {viewId, xPct, yPct} while a new pin is being authored
     editing: false, // the active pin's canvas card is in edit mode (vs read-only)
     filters: { status: 'all', category: 'all', sortBy: 'created', q: '' },
@@ -177,7 +178,9 @@ export function wireControls(ctx) {
   document.addEventListener('keydown', (e) => {
     if (e.key !== 'Escape') return;
     if (overflowMenu && !overflowMenu.hidden) { closeOverflow(); return; }
-    if (ctx.state.placeMode || ctx.state.composer) ctx.setState({ placeMode: false, composer: null });
+    if (ctx.state.placeMode || ctx.state.composer || ctx.state.drawMode) {
+      ctx.setState({ placeMode: false, composer: null, drawMode: false });
+    }
   });
 
   // Identity: session name (left header + collapsed pill) + presence initial.

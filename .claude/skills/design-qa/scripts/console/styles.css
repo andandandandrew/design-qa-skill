@@ -125,17 +125,25 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: 0; backg
   animation: live-pulse 1.6s infinite; }
 .locked-msg { font-size: var(--fs-12); line-height: 1.5; color: var(--ink-mid); }
 
+/* DesignOS floating bottom-toolbar (src/app/bottom-toolbar.jsx): a surface-1
+   pill of 28px square icon tools with hover tooltip chips; active = accent. */
 .canvas-cluster { position: absolute; bottom: var(--s-8); left: 50%; transform: translateX(-50%);
-  display: inline-flex; align-items: center; gap: var(--s-4); height: var(--cluster-h);
-  padding: 0 var(--s-5) 0 var(--s-3); background: var(--surface-1); border-radius: var(--r-float);
-  box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft); z-index: 30; max-width: calc(100% - 48px); }
-.cluster-btn { height: var(--ctl-lg); padding: 0 12px; display: inline-flex; align-items: center; gap: var(--s-3);
-  border-radius: var(--r-control); background: transparent; color: var(--ink-mid); font-size: var(--fs-12); font-weight: 500;
-  transition: background 90ms, color 90ms; }
-.cluster-btn:hover { background: var(--surface-3); color: var(--ink-hi); }
-.cluster-btn.active { background: var(--accent); color: var(--accent-ink); }
-.cluster-hint { font-size: var(--fs-11); color: var(--ink-lo); padding-right: var(--s-2); white-space: nowrap;
-  overflow: hidden; text-overflow: ellipsis; }
+  display: inline-flex; align-items: center; gap: var(--s-2); height: var(--cluster-h);
+  padding: var(--s-3); background: var(--surface-1); color: var(--ink-hi); border-radius: var(--r-float);
+  box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft); z-index: 30; }
+.cluster-tool { position: relative; width: var(--ctl-lg); height: var(--ctl-lg);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--r-control); background: transparent; color: var(--ink-hi);
+  transition: background 60ms, color 60ms; }
+.cluster-tool:hover { background: var(--surface-3); }
+.cluster-tool.active { background: var(--accent); color: var(--accent-ink); }
+/* Tooltip chip — floats above the tool on hover (bottomToolbarStyles.tooltip). */
+.cluster-tip { position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  height: var(--ctl-sm); padding: 0 var(--s-4); display: inline-flex; align-items: center;
+  background: var(--surface-overlay); color: var(--ink-hi); font-size: var(--fs-11); font-weight: 500;
+  border-radius: var(--r-control); box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft);
+  white-space: nowrap; pointer-events: none; opacity: 0; transition: opacity 60ms; }
+.cluster-tool:hover .cluster-tip { opacity: 1; }
 
 /* Pin marker — DesignOS Pin atom (teardrop, tail at bottom-left toward the
    anchor). A contrasting accent-ink ring keeps it legible on screenshots. */

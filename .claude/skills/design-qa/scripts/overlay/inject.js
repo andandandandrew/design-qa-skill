@@ -852,8 +852,13 @@
   }
 
   function placeCard(pop, pin) {
-    pop.style.left = pin.x + 'px';
-    pop.style.top = (pin.y - 24) + 'px'; // align card top with the pin bubble top
+    // Anchor the card off the SAME helper the marker bubble uses, so it sits
+    // beside the bubble for every kind. Committed drawings/elements carry no
+    // x/y (only pathsPx/boxPx until seal), so reading pin.x raw put the card at
+    // the document origin — pinAnchorPx resolves the shape centre instead.
+    const a = pinAnchorPx(pin);
+    pop.style.left = a.x + 'px';
+    pop.style.top = (a.y - 24) + 'px'; // align card top with the pin bubble top
     popoverLayer.appendChild(pop);
   }
 

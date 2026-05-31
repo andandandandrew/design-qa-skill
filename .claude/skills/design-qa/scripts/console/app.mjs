@@ -45,11 +45,16 @@ async function main() {
 
   wireControls(ctx);
 
-  // Add pin — same gesture in both modes. The isLocked() guard only fires for
-  // an unsealed browser view, which only exists on the live owned session.
+  // Add pin / Draw — the two tools applicable to a frozen screenshot. Each is
+  // mutually exclusive with the other (and with the composer). The isLocked()
+  // guard only fires for an unsealed browser view (live owned session only).
   document.getElementById('addPinBtn')?.addEventListener('click', () => {
     if (ctx.isLocked(ctx.activeView())) return;
-    ctx.setState({ placeMode: !ctx.state.placeMode, composer: null });
+    ctx.setState({ placeMode: !ctx.state.placeMode, drawMode: false, composer: null });
+  });
+  document.getElementById('drawBtn')?.addEventListener('click', () => {
+    if (ctx.isLocked(ctx.activeView())) return;
+    ctx.setState({ drawMode: !ctx.state.drawMode, placeMode: false, composer: null });
   });
 
   // Add screen (manual upload) — every store that exposes addManualScreen.
@@ -151,10 +156,12 @@ function renderConsoleChrome(ctx) {
   const addPin = document.getElementById('addPinBtn');
   if (addPin) {
     addPin.disabled = locked;
-    const placing = ctx.state.placeMode && !locked;
-    addPin.classList.toggle('active', placing);
-    const label = addPin.querySelector('.cluster-btn-label');
-    if (label) label.textContent = placing ? 'Cancel' : 'Add pin';
+    addPin.classList.toggle('active', ctx.state.placeMode && !locked);
+  }
+  const draw = document.getElementById('drawBtn');
+  if (draw) {
+    draw.disabled = locked;
+    draw.classList.toggle('active', ctx.state.drawMode && !locked);
   }
 }
 

@@ -64,6 +64,38 @@ export class MemoryStore {
     return pin;
   }
 
+  // Console drawing authoring (fixture/dev path). Paths arrive in %; build the
+  // shape directly (no RDP here — the fixture store is dev-only). Mirrors the
+  // server's createDrawingPct shape so the renderer is identical.
+  async createDrawing({ viewId, paths, note = '', category = null, author = null }) {
+    const view = this.getView(viewId);
+    if (!view) throw new Error(`view ${viewId} not found`);
+    const clean = (paths || [])
+      .filter((s) => Array.isArray(s) && s.length)
+      .map((s) => s.map(([x, y]) => [clampPct(x), clampPct(y)]));
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const s of clean) for (const [x, y] of s) {
+      if (x < minX) minX = x; if (y < minY) minY = y;
+      if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+    }
+    const bounds = Number.isFinite(minX)
+      ? { xPct: minX, yPct: minY, wPct: maxX - minX, hPct: maxY - minY }
+      : { xPct: 0, yPct: 0, wPct: 0, hPct: 0 };
+    const pin = {
+      id: this._newId('pin'),
+      viewId,
+      type: 'drawing',
+      shape: { kind: 'path', paths: clean, bounds, strokeWidth: 3, color: '#e5484d' },
+      xPct: clampPct(bounds.xPct + bounds.wPct / 2),
+      yPct: clampPct(bounds.yPct + bounds.hPct / 2),
+      note, category, author,
+      status: 'open', resolvedNote: null, createdAt: new Date().toISOString(),
+    };
+    view.pins.push(pin);
+    this._changed('pin:create', { pinId: pin.id, viewId });
+    return pin;
+  }
+
   async updatePin({ pinId, note, category }) {
     const { pin } = this._findPin(pinId);
     if (!pin) throw new Error(`pin ${pinId} not found`);
