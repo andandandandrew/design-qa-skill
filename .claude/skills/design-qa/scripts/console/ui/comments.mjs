@@ -53,9 +53,17 @@ function buildCard(ctx, p, view) {
     initialOf(authorName));
 
   // ── Body column ──
+  // Feedback-platform: heterogeneous cards. A label-light kind hint in the
+  // breadcrumb distinguishes a drawing / element record from a text pin without
+  // a bespoke icon system (deferred to the design pass). Element shows its
+  // captured name; drawing shows "Drawing"; text shows nothing extra.
+  const kindLabel = p.type === 'drawing' ? 'Drawing'
+    : p.type === 'element' ? (p.element?.name || 'Element')
+      : null;
   const crumb = el('div', { class: 'comment-crumb' }, [
     el('span', { class: 'comment-crumb-n' }, `#${p.index}`),
     ' · ',
+    ...(kindLabel ? [el('span', { class: 'comment-crumb-kind' }, kindLabel), ' · '] : []),
     el('span', { class: 'comment-crumb-screen' }, view.name || '(unnamed screen)'),
   ]);
   const byline = el('div', { class: 'comment-byline' }, [

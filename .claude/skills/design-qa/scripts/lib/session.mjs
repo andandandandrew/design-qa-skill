@@ -60,11 +60,81 @@ export async function readSession(sessionDir) {
   return JSON.parse(raw);
 }
 
+// Feedback-platform (Spike 11) drawing render defaults. Stroke width is a
+// constant css px rendered non-scaling over the responsive screenshot; color
+// is the same alert-red the live ink preview uses.
+const DRAWING_STROKE_WIDTH = 3;
+const DRAWING_COLOR = '#e5484d';
+const RDP_EPSILON_PCT = 0.4; // Ramer–Douglas–Peucker tolerance, in % space.
+
+function round3(n) { return +Number(n).toFixed(3); }
+
+/** Perpendicular distance of point p to the line a→b, in % space. */
+function perpDistPct(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len = Math.hypot(dx, dy) || 1;
+  return Math.abs((p[0] - a[0]) * dy - (p[1] - a[1]) * dx) / len;
+}
+
+/** Ramer–Douglas–Peucker simplification of a [[x,y],…] polyline (% space). */
+function rdpSimplify(pts, eps) {
+  if (pts.length < 3) return pts;
+  let maxD = 0, idx = 0;
+  const a = pts[0], b = pts[pts.length - 1];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = perpDistPct(pts[i], a, b);
+    if (d > maxD) { maxD = d; idx = i; }
+  }
+  if (maxD > eps) {
+    return [...rdpSimplify(pts.slice(0, idx + 1), eps).slice(0, -1), ...rdpSimplify(pts.slice(idx), eps)];
+  }
+  return [a, b];
+}
+
+/** %-bounding-box over every point of a paths[][] (% space). */
+function boundsOfPaths(paths) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const stroke of paths) {
+    for (const [x, y] of stroke) {
+      if (x < minX) minX = x; if (y < minY) minY = y;
+      if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+    }
+  }
+  if (!Number.isFinite(minX)) return { xPct: 0, yPct: 0, wPct: 0, hPct: 0 };
+  return { xPct: round3(minX), yPct: round3(minY), wPct: round3(maxX - minX), hPct: round3(maxY - minY) };
+}
+
+/**
+ * Drawing seal (Spike 11): convert a record's working `pathsPx` (page-px doc
+ * coords, one array per stroke) to the canonical %-at-rest `shape`, RDP-
+ * simplified, via the SAME DPR-aware transform pins use. Sets `xPct/yPct` to
+ * the bbox centre so existing pin-keyed focus/scroll/selection code works, then
+ * drops `pathsPx` (working coord only — the % shape is canonical from here).
+ */
+function normalizeDrawing(p, { viewportWidth, shotWidth, shotHeight }) {
+  const paths = [];
+  for (const stroke of p.pathsPx) {
+    if (!Array.isArray(stroke) || stroke.length === 0) continue;
+    const pts = stroke.map(([x, y]) => {
+      const { xPct, yPct } = pagePxToPct({ x, y, viewportWidth, shotWidth, shotHeight });
+      return [round3(xPct), round3(yPct)];
+    });
+    paths.push(rdpSimplify(pts, RDP_EPSILON_PCT).map(([x, y]) => [round3(x), round3(y)]));
+  }
+  const bounds = boundsOfPaths(paths);
+  p.shape = { kind: 'path', paths, bounds, strokeWidth: DRAWING_STROKE_WIDTH, color: DRAWING_COLOR };
+  p.xPct = clampPct(bounds.xPct + bounds.wPct / 2);
+  p.yPct = clampPct(bounds.yPct + bounds.hPct / 2);
+  delete p.pathsPx;
+}
+
 /**
  * Compute %-of-image coords for a view's pins from its (final) screenshot.
  * Additive: leaves px x/y in place as the live overlay's working coords and
  * sets xPct/yPct as the canonical at-rest position. Browser pins only — manual
- * pins are born with xPct/yPct and have no px to convert.
+ * pins are born with xPct/yPct and have no px to convert. `type:'drawing'`
+ * records carry working `pathsPx` instead of x/y; they normalize to a %-`shape`
+ * through the same screenshot-relative transform.
  */
 async function normalizeViewPins(sessionDir, view) {
   if (!view.screenshot || view.source === 'manual') return;
@@ -75,6 +145,10 @@ async function normalizeViewPins(sessionDir, view) {
   } catch { return; }
   const vp = view.viewport || { width: shotWidth, height: shotHeight };
   for (const p of view.pins) {
+    if (p.type === 'drawing' && Array.isArray(p.pathsPx)) {
+      normalizeDrawing(p, { viewportWidth: vp.width, shotWidth, shotHeight });
+      continue;
+    }
     if (typeof p.x !== 'number' || typeof p.y !== 'number') continue;
     const { xPct, yPct } = pagePxToPct({
       x: p.x, y: p.y, viewportWidth: vp.width, shotWidth, shotHeight,
@@ -117,6 +191,10 @@ export async function migrateDoc(sessionDir, doc) {
       if (p.status == null) { p.status = 'open'; changed = true; }
       if (p.resolvedNote === undefined) { p.resolvedNote = null; changed = true; }
       if (p.category === undefined) { p.category = null; changed = true; }
+      // Feedback-platform: every record carries a `type` discriminator. Legacy
+      // records are pinned text notes; default them to 'text'. Folded into v4
+      // additively (no version bump), like recordingDoneAt.
+      if (p.type === undefined) { p.type = 'text'; changed = true; }
     }
     const needsPct = view.pins.some((p) => p.xPct == null && typeof p.x === 'number');
     if (needsPct && (view.sealedAt || view.screenshot)) {
@@ -272,9 +350,45 @@ export class SessionStore {
     const pin = {
       id: newId('pin'),
       viewId,
+      type: 'text',
       x,
       y,
       note: note || '',
+      category,
+      author: stampedAuthor,
+      status: 'open',
+      resolvedNote: null,
+      createdAt: new Date().toISOString(),
+    };
+    view.pins.push(pin);
+    await this.persist();
+    return pin;
+  }
+
+  /**
+   * Create a drawing feedback record (Spike 11). Like createPin, this is the
+   * live-browser path: strokes arrive as working page-px doc coords (`pathsPx`,
+   * one array of [x,y] per stroke) and normalize to a %-`shape` at sealView via
+   * normalizeDrawing. A note is REQUIRED (the user-settled commit rule: a
+   * drawing seals only when the composer is submitted with text). Lives in
+   * view.pins[] beside text pins, unified by `type`.
+   */
+  async createDrawing({ viewId, pathsPx, note, category = null, author }) {
+    const view = this.findViewById(viewId);
+    if (!view) throw new Error(`view ${viewId} not found`);
+    if (view.sealedAt) throw new Error(`view ${viewId} is sealed`);
+    if (!Array.isArray(pathsPx) || pathsPx.length === 0 || !pathsPx.some((s) => Array.isArray(s) && s.length)) {
+      throw new Error('drawing requires at least one non-empty stroke');
+    }
+    const trimmedNote = typeof note === 'string' ? note.trim() : '';
+    if (!trimmedNote) throw new Error('drawing requires a note');
+    const stampedAuthor = author ?? this.doc.author?.name ?? null;
+    const pin = {
+      id: newId('pin'),
+      viewId,
+      type: 'drawing',
+      pathsPx,            // working page-px strokes; → %-shape at seal
+      note: trimmedNote,
       category,
       author: stampedAuthor,
       status: 'open',
@@ -370,6 +484,7 @@ export class SessionStore {
     const pin = {
       id: newId('pin'),
       viewId,
+      type: 'text',
       xPct: clampPct(xPct),
       yPct: clampPct(yPct),
       note: note || '',

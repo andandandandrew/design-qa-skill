@@ -47,6 +47,12 @@
     pins: [],
     activePinId: null,
     placementMode: false,
+    // Spike 11 (drawing): freehand markup mode. `draftStrokes` accumulates the
+    // current (uncommitted) drawing as page-px doc-coord strokes; `drawDraftId`
+    // is the temp-pin id whose composer collects the REQUIRED note that seals it.
+    drawMode: false,
+    draftStrokes: [],
+    drawDraftId: null,
     // Spike 8: recorder state pushed from Node via __designQA_setRecorderState.
     // `active` flips at Mark-start; `count` is total post-Mark-start steps
     // across all views; `startedAtMs` is the Node wall clock at Mark-start;
@@ -139,7 +145,8 @@
     /* Chrome — hidden during screenshots (opacity preserves focus) */
     .chrome { pointer-events: none; }
     .root.capture-mode .chrome,
-    .root.capture-mode .pin-layer { opacity: 0; pointer-events: none !important; }
+    .root.capture-mode .pin-layer,
+    .root.capture-mode .draw-ink { opacity: 0; pointer-events: none !important; }
     .root.capture-mode .chrome *,
     .root.capture-mode .pin-layer * {
       transition: none !important; animation: none !important; pointer-events: none !important;
@@ -151,6 +158,18 @@
       position: fixed; inset: 0; pointer-events: auto; cursor: crosshair;
       background: oklch(0.15 0.01 250 / 0.18);
     }
+
+    /* Spike 11 draw mode: a lighter catch veil (clone of .placement-cursor) +
+       a document-space SVG ink layer rendered in page-px (hidden at capture
+       like the pin layer). The veil is inserted as chrome's first child so the
+       note composer paints above it and stays clickable while the tool is on. */
+    .draw-veil {
+      position: fixed; inset: 0; pointer-events: auto; cursor: crosshair;
+      background: oklch(0.15 0.01 250 / 0.12); touch-action: none;
+    }
+    .draw-ink { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
+    .draw-ink path { fill: none; stroke: #e5484d; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+    .draw-ink path.muted { stroke: var(--ink-mid, #8a93a6); }
 
     /* ── Mini-toolbar pill (top-center by default, draggable) ─────────── */
     .toolbar {
@@ -502,6 +521,7 @@
     <span class="tb-divider"></span>
     <span class="tb-cluster">
       <span class="tb-ibtn" id="commentBtn" title="Comment — click, then click on the page">${ICON_COMMENT}</span>
+      <span class="tb-ibtn" id="drawBtn" title="Draw — mark up the page, then add a required note">${ICON_PENCIL}</span>
       <span class="tb-ibtn" id="newScreenBtn" title="New screen — seal this screen's comments and start a fresh, separate set of pins on this page">${ICON_PLUS}</span>
     </span>
     <span class="tb-divider"></span>
@@ -560,7 +580,8 @@
       const { view } = await window.__designQA_loadForUrl({ url: location.href });
       if (view && view.id === STATE.viewId) {
         STATE.pins = view.pins.map((p) => ({
-          id: p.id, x: p.x, y: p.y, note: p.note,
+          id: p.id, type: p.type ?? 'text', x: p.x, y: p.y, note: p.note,
+          pathsPx: p.pathsPx ?? null,
           category: p.category ?? null, author: p.author ?? null,
           status: p.status ?? 'open', createdAt: p.createdAt ?? null,
         }));
@@ -626,6 +647,14 @@
 
   // ------- Render: pins -------------------------------------------------
 
+  // A drawing record carries no x/y until seal (only working pathsPx) — its
+  // bubble anchors at the strokes' bbox centre. Text pins use their x/y.
+  function pinAnchorPx(pin) {
+    if (typeof pin.x === 'number' && !Number.isNaN(pin.x)) return { x: pin.x, y: pin.y };
+    if (Array.isArray(pin.pathsPx)) return strokesBBoxCenterPx(pin.pathsPx);
+    return { x: 0, y: 0 };
+  }
+
   function renderPins() {
     pinLayer.innerHTML = '';
     STATE.pins.forEach((pin, i) => {
@@ -633,13 +662,15 @@
       el.className = 'pin' + (pin.id === STATE.activePinId ? ' active' : '');
       // Anchor: pin's bottom-left tail tip at (x, y). Element's box top-left
       // is (x, y - 24); the bubble has its tail at bottom-left.
-      el.style.left = pin.x + 'px';
-      el.style.top = (pin.y - 24) + 'px';
+      const a = pinAnchorPx(pin);
+      el.style.left = a.x + 'px';
+      el.style.top = (a.y - 24) + 'px';
       el.dataset.id = pin.id;
       el.innerHTML = `<span>${i + 1}</span>`;
       attachPinHandlers(el, pin);
       pinLayer.appendChild(el);
     });
+    renderInk(); // keep the drawing ink layer in sync with the rendered records
     logPins('renderPins');
   }
 
@@ -655,7 +686,9 @@
         startPinX: pin.x, startPinY: pin.y,
         moved: false,
         popoverWasOpen: STATE.activePinId === pin.id,
-        canDrag: !String(pin.id).startsWith(TEMP_PREFIX),
+        // Drawings anchor to a shape; dragging the centroid bubble would desync
+        // it from the ink, so they're select-only (like a sealed pin).
+        canDrag: !String(pin.id).startsWith(TEMP_PREFIX) && pin.type !== 'drawing',
       };
     });
 
@@ -797,6 +830,11 @@
     const sendBtn = pop.querySelector('.send-btn');
     pop.querySelector('.cat-slot').appendChild(
       buildCategoryControl(() => draftCategory, (c) => { draftCategory = c; }));
+    // Spike 11: a drawing's note is REQUIRED and is what seals the record —
+    // signal that in the placeholder. Send routes to commitDrawing; Escape
+    // discards the whole in-progress drawing (not just the popover).
+    const isDrawing = pin.kind === 'drawing';
+    if (isDrawing) ta.placeholder = 'Add a note for this drawing (required)…';
     ta.value = pin.note || '';
     autoGrow(ta);
     ta.focus();
@@ -809,11 +847,15 @@
       sendBtn.setAttribute('aria-disabled', hasText ? 'false' : 'true');
     };
     sync();
-    const send = () => { if (ta.value.trim()) commitTempPin(pin, ta.value, draftCategory); };
+    const send = () => {
+      if (!ta.value.trim()) return;
+      if (isDrawing) commitDrawing(pin, ta.value, draftCategory);
+      else commitTempPin(pin, ta.value, draftCategory);
+    };
     ta.addEventListener('input', () => { autoGrow(ta); sync(); });
     ta.addEventListener('keydown', (e) => {
       if ((e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) { e.preventDefault(); send(); return; }
-      if (e.key === 'Escape') { e.preventDefault(); closePopoverIfOpen(); }
+      if (e.key === 'Escape') { e.preventDefault(); isDrawing ? cancelDraw() : closePopoverIfOpen(); }
     });
     sendBtn.addEventListener('click', () => { if (sendBtn.getAttribute('aria-disabled') !== 'true') send(); });
   }
@@ -1231,6 +1273,7 @@
   // ------- Placement mode -----------------------------------------------
 
   function setPlacementMode(on) {
+    if (on && STATE.drawMode) setDrawMode(false); // modes are mutually exclusive
     STATE.placementMode = on;
     const btn = $('commentBtn');
     if (btn) {
@@ -1269,6 +1312,201 @@
     STATE.editing = false;
     renderPins();
     renderPopover();
+  }
+
+  // ------- Draw mode (Spike 11) -----------------------------------------
+  //
+  // A full-screen catch veil (clone of placement mode) collects freehand
+  // strokes in page-px doc coords. Strokes accumulate into STATE.draftStrokes;
+  // the live SVG ink layer (page-px, document-space, hidden at capture) renders
+  // both committed drawings and the in-progress draft. After the first real
+  // stroke a composer opens for the REQUIRED note — submitting it seals the
+  // drawing (one record, all strokes); Esc / right-click / empty discards.
+
+  let drawVeil = null;
+  let inkLayer = null;
+  let drawingStroke = null; // the stroke currently being drawn (array of [x,y])
+
+  function ensureInkLayer() {
+    if (inkLayer) return inkLayer;
+    inkLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    inkLayer.setAttribute('class', 'draw-ink');
+    root.appendChild(inkLayer);
+    return inkLayer;
+  }
+
+  function strokesBBoxCenterPx(strokes) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const s of strokes) for (const [x, y] of s) {
+      if (x < minX) minX = x; if (y < minY) minY = y;
+      if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+    }
+    if (!Number.isFinite(minX)) {
+      return { x: window.scrollX + window.innerWidth / 2, y: window.scrollY + window.innerHeight / 2 };
+    }
+    return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  }
+
+  function inkPathD(pts) {
+    if (!pts.length) return '';
+    return 'M ' + pts.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join(' L ');
+  }
+
+  function appendStrokes(layer, strokes, muted) {
+    for (const pts of strokes) {
+      if (!pts || pts.length < 1) continue;
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+      path.setAttribute('d', inkPathD(pts));
+      if (muted) path.setAttribute('class', 'muted');
+      layer.appendChild(path);
+    }
+  }
+
+  // Redraw the document-space ink: every committed drawing on this view + the
+  // active draft. Sized to the scrollable document so page-px coords land right.
+  function renderInk() {
+    const layer = ensureInkLayer();
+    const docW = Math.max(document.documentElement.scrollWidth, window.innerWidth);
+    const docH = Math.max(document.documentElement.scrollHeight, window.innerHeight);
+    layer.setAttribute('width', String(docW));
+    layer.setAttribute('height', String(docH));
+    layer.innerHTML = '';
+    for (const pin of STATE.pins) {
+      if (pin.type === 'drawing' && Array.isArray(pin.pathsPx)) {
+        appendStrokes(layer, pin.pathsPx, pin.status === 'resolved');
+      }
+    }
+    if (STATE.drawMode && STATE.draftStrokes.length) appendStrokes(layer, STATE.draftStrokes, false);
+  }
+
+  function setDrawMode(on) {
+    if (on && STATE.placementMode) setPlacementMode(false); // mutually exclusive
+    STATE.drawMode = on;
+    const btn = $('drawBtn');
+    if (btn) {
+      btn.classList.toggle('active', on);
+      btn.title = on ? 'Exit draw mode (Esc)' : 'Draw — mark up the page, then add a required note';
+    }
+    if (on) {
+      STATE.draftStrokes = [];
+      STATE.drawDraftId = null;
+      drawingStroke = null;
+      drawVeil = document.createElement('div');
+      drawVeil.className = 'draw-veil';
+      drawVeil.addEventListener('pointerdown', onDrawDown);
+      drawVeil.addEventListener('pointermove', onDrawMove);
+      drawVeil.addEventListener('pointerup', onDrawUp);
+      drawVeil.addEventListener('contextmenu', (e) => { e.preventDefault(); cancelDraw(); });
+      window.addEventListener('keydown', drawEscCancel, { capture: true });
+      // First child of chrome → the note composer (in popoverLayer, a later
+      // sibling) paints above the veil and stays clickable.
+      chrome.insertBefore(drawVeil, chrome.firstChild);
+    } else {
+      if (drawVeil) { drawVeil.remove(); drawVeil = null; }
+      window.removeEventListener('keydown', drawEscCancel, { capture: true });
+      STATE.draftStrokes = [];
+      STATE.drawDraftId = null;
+      drawingStroke = null;
+    }
+    renderInk();
+  }
+
+  function drawEscCancel(e) {
+    if (e.key === 'Escape') { e.preventDefault(); cancelDraw(); }
+  }
+
+  function onDrawDown(e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    drawVeil.setPointerCapture?.(e.pointerId);
+    drawingStroke = [[e.clientX + window.scrollX, e.clientY + window.scrollY]];
+    STATE.draftStrokes.push(drawingStroke);
+    renderInk();
+  }
+
+  function onDrawMove(e) {
+    if (!drawingStroke) return;
+    drawingStroke.push([e.clientX + window.scrollX, e.clientY + window.scrollY]);
+    renderInk();
+  }
+
+  function onDrawUp(e) {
+    if (!drawingStroke) return;
+    drawVeil.releasePointerCapture?.(e.pointerId);
+    if (drawingStroke.length < 2) STATE.draftStrokes.pop(); // a click, not a stroke
+    drawingStroke = null;
+    renderInk();
+    if (STATE.draftStrokes.length) openDrawComposer();
+  }
+
+  // Show the required-note composer once for a draft. Reuses renderComposer via
+  // a temp pin flagged kind:'drawing'; subsequent strokes keep the same composer
+  // (don't recreate — that would clear typed text).
+  function openDrawComposer() {
+    if (STATE.drawDraftId) return;
+    const c = strokesBBoxCenterPx(STATE.draftStrokes);
+    const tId = tempId();
+    STATE.drawDraftId = tId;
+    STATE.pins.push({ id: tId, kind: 'drawing', type: 'drawing', x: c.x, y: c.y, note: '', category: null });
+    STATE.activePinId = tId;
+    STATE.editing = false;
+    renderPins();
+    renderPopover();
+  }
+
+  function cancelDraw() {
+    const id = STATE.drawDraftId;
+    if (id) {
+      STATE.pins = STATE.pins.filter((p) => p.id !== id);
+      STATE.activePinId = null;
+      STATE.editing = false;
+    }
+    setDrawMode(false); // clears strokes + veil; renderInk
+    renderPins();
+    renderPopover();
+  }
+
+  // Seal the draft drawing: lazy-create the view (like commitTempPin), persist
+  // all strokes as one drawing record with the required note, then exit draw
+  // mode. The committed record carries pathsPx so the live ink survives reload.
+  async function commitDrawing(draftPin, note, category) {
+    const strokes = STATE.draftStrokes.map((s) => s.map((p) => [p[0], p[1]]));
+    const tempIdVal = draftPin.id;
+    if (!STATE.viewId) {
+      try {
+        const result = await window.__designQA_ensureView({
+          url: location.href,
+          title: document.title || location.href,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        });
+        STATE.viewId = result.viewId;
+      } catch (e) {
+        console.warn('design-qa: ensureView failed', e);
+        cancelDraw();
+        return;
+      }
+    }
+    try {
+      const { pinId } = await window.__designQA_createDrawing({
+        viewId: STATE.viewId, pathsPx: strokes, note, category: category || null,
+      });
+      draftPin.id = pinId;
+      draftPin.note = note;
+      draftPin.category = category || null;
+      draftPin.pathsPx = strokes;
+      delete draftPin.kind;
+      draftPin.type = 'drawing';
+    } catch (e) {
+      console.warn('design-qa: createDrawing failed', e);
+      STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
+    }
+    STATE.drawDraftId = null;
+    STATE.activePinId = null;
+    STATE.editing = false;
+    setDrawMode(false);
+    renderPins();
+    renderPopover();
+    await reloadActiveViewPins();
   }
 
   // ------- Toolbar drag -------------------------------------------------
@@ -1366,6 +1604,7 @@
     return new Promise((resolve) => {
       const need = [
         '__designQA_loadForUrl', '__designQA_ensureView', '__designQA_createPin',
+        '__designQA_createDrawing',
         '__designQA_updatePin', '__designQA_deletePin', '__designQA_startNewView',
         '__designQA_sealCurrentView', '__designQA_markStart', '__designQA_stopRecording',
         '__designQA_discardRecording', '__designQA_fetchRecorderSteps',
@@ -1404,6 +1643,7 @@
   toolbar.addEventListener('click', (e) => {
     const id = e.target?.closest?.('[id]')?.id;
     if (id === 'commentBtn') { setPlacementMode(!STATE.placementMode); return; }
+    if (id === 'drawBtn') { setDrawMode(!STATE.drawMode); return; }
     if (id === 'newScreenBtn') { requestNewScreen(); return; }
     if (id === 'recBtn') { onRecToggle(); return; }
     if (id === 'doneBtn') { requestDone(); return; }

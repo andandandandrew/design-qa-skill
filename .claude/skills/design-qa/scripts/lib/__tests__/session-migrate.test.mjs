@@ -72,6 +72,7 @@ test('migration preserves existing v4 data without clobbering it', async () => {
   doc.recordingDoneAt = null; // present so this is a complete current v4 doc
   doc.preconditionSteps = [{ kind: 'action', code: '// existing' }];
   doc.views[0].steps = [{ kind: 'action', code: 'await page.click(...)' }];
+  doc.views[0].pins[0].type = 'text'; // feedback-platform: present on a complete v4 doc
   const changed = await migrateDoc('/tmp/does-not-exist', doc);
   // Some of the v3-introduced fields above may already be present in this
   // synthesized doc, so `changed` may be false. The contract is "do not lose data."

@@ -356,7 +356,14 @@ export async function attachCapture(store, {
         id: view.id,
         url: view.url,
         name: view.name,
-        pins: view.pins.map((p) => ({ id: p.id, x: p.x, y: p.y, note: p.note })),
+        // type + pathsPx let the live overlay re-render committed drawings
+        // (which carry no x/y until seal) from their working px strokes.
+        pins: view.pins.map((p) => ({
+          id: p.id, type: p.type ?? 'text', x: p.x, y: p.y, note: p.note,
+          pathsPx: p.pathsPx ?? null,
+          category: p.category ?? null, author: p.author ?? null,
+          status: p.status ?? 'open', createdAt: p.createdAt ?? null,
+        })),
       },
     };
   });
@@ -494,6 +501,19 @@ export async function attachCapture(store, {
     if (view && !view.screenshot) await takeScreenshotFor(viewId, page, { fullPage: true });
     else scheduleScreenshot(viewId, page);
     return { pinId: pin.id };
+  });
+
+  // Spike 11: create a drawing feedback record. Strokes arrive as working
+  // page-px doc coords (pathsPx); they normalize to a %-shape at seal, exactly
+  // like a pin's px x/y. Same screenshot policy as createPin — capture a
+  // baseline immediately for the first feedback, debounce subsequent ones.
+  await context.exposeBinding('__designQA_createDrawing', async ({ page }, { viewId, pathsPx, note, category }) => {
+    const drawing = await store.createDrawing({ viewId, pathsPx, note, category });
+    viewPages.set(viewId, page);
+    const view = store.findViewById(viewId);
+    if (view && !view.screenshot) await takeScreenshotFor(viewId, page, { fullPage: true });
+    else scheduleScreenshot(viewId, page);
+    return { pinId: drawing.id };
   });
 
   await context.exposeBinding('__designQA_updatePin', async ({ page }, { pinId, note, x, y, category }) => {
