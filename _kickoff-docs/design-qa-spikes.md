@@ -202,6 +202,201 @@ not later.** Full algorithm + tradeoffs in the design doc §"POC results" + §4.
 
 ---
 
+## Spike 11 — Drawing / markup feedback *(post-DesignOS, 2026-05-31) — RESEARCH ONLY*
+
+**Framing.** Part of the **"feedback platform, not commenting platform"** reframe (see
+`design-qa-feedback-platform.md`). A pinned text note is one *kind* of feedback; a drawn
+markup is another. Both are first-class, unified by a `type` discriminator on the feedback
+record. This spike assesses feasibility before any implementation — do not pre-commit.
+
+**Question.** Can the overlay let a reviewer grab a pen tool and freely draw on the page —
+circling/marking the region they mean — optionally attaching a text note via (a variant of)
+the existing comment input, and have that drawing persist alongside pins, bake into the
+same screenshot review, and render identically in the console and the exported artifact?
+
+**Why it matters.** Many reviewers point before they can phrase. A drawn shape captures
+"look *here* / *this* relationship" with zero articulation cost, and the optional note then
+carries the message. It's the lowest-articulation-bar feedback we can offer, and it
+composes with everything else on the screen.
+
+**What to probe.**
+
+- **Capture surface.** A transparent draw layer inside the closed shadow DOM, taking
+  pointer events while the tool is active — modeled on the existing **placement-mode**
+  pattern (`inject.js` `setPlacementMode` / `.placement-cursor`, the full-screen capture
+  veil). Must respect the `chrome` event boundary (the overlay already stops events at the
+  shadow host so the page underneath doesn't react). How does a draw stroke coexist with
+  the page's own scroll/selection?
+- **Shape model.** Freehand path (array of points) vs. primitives (rectangle / ellipse /
+  arrow). Freehand is most expressive; primitives are cleaner to render and lighter at
+  rest. Lean: support freehand path first; primitives are a later affordance. Decide the
+  at-rest representation.
+- **Coordinate normalization.** Strokes are captured in page-px (like live pins). Reuse the
+  px→% normalization (`lib/coords.mjs` `pagePxToPct`, the same DPR-aware seal path pins
+  use) so a drawing is stored as **%-at-rest** and renders responsively over the
+  screenshot at any scale — matching the pin model exactly.
+- **Screenshot composition.** Critical: pins are **NOT baked into the PNG** — they overlay
+  from `session.json` at render time (`canvas.mjs` `buildMarker`, `%`-positioned; chrome is
+  hidden during capture via `capture-mode`). A drawing must follow the *same* rule: store
+  the shape, render it as an SVG/overlay layer over the screenshot in the shared canvas
+  module, NOT rasterize it into the PNG. Confirm an SVG overlay scales cleanly with the
+  `%`-positioned wrapper.
+- **Comment input reuse.** The composer (`inject.js` `.cmt-*`, `renderPopover` composer
+  branch) already does auto-grow textarea + category chip + send. For a drawing, the same
+  input laid out differently (anchored to the shape's bounds rather than a pin tail). The
+  note is *optional* for a drawing (a bare circle with no text is valid feedback).
+- **Save / exit gesture.** "Save to exit the mode." Define what seals a drawing: explicit
+  save, or tool-toggle-off. One drawing per activation, or multiple strokes grouped into
+  one feedback record?
+- **Data model.** Smallest change: `type: 'drawing'` on the feedback record with a `shape`
+  payload (`{ kind, points[]|bounds, strokeWidth, color }`) plus the shared fields (note,
+  category, author, status). Existing records default to `type: 'text'`.
+- **Render in review.** Heterogeneous cards in the sidebar (`comments.mjs` `buildCard`) — a
+  drawing's card shows a thumbnail/summary instead of a pin number. The marker loop in
+  `canvas.mjs` branches on `type`.
+
+**Done when.** A written feasibility verdict (confidence level), a recommended at-rest
+shape representation, the concrete integration points (capture layer, normalization,
+screenshot-overlay render, composer reuse, `type` model), and the open questions — written
+to also serve as a **design requirement for Claude Design**. Not an implementation.
+
+**POC RESULT (2026-05-31): FEASIBLE — high confidence on all four mechanics.** Throwaway
+POC validated against the real overlay/capture harness (`scripts/spike11-poc.mjs`,
+gitignored). The risky parts reuse the exact seams pins already ride on — nothing new
+invented.
+
+- **Stroke capture in shadow DOM ✓** — a transparent veil cloning `.placement-cursor`
+  (`pointer-events:auto`, `cursor:crosshair`, `touch-action:none`) captured 24/24 pointer
+  points; the page's own pointer handler fired **0 times** (the `chrome` `stopPropagation`
+  boundary holds); deactivating removes the veil and fully restores page scroll/interaction.
+- **Coordinate round-trip ✓ — 0.00 px error, and DPR-invariant** (re-validated at DPR=2:
+  `maxPctDelta = 0`). Reuses `lib/coords.mjs pagePxToPct` unchanged; `yPct` correctly uses
+  `docHeightCss = shotHeight/dpr` so off-fold strokes land right.
+- **Overlay-not-baked ✓** — screenshot sampled under a stroke returned the page's own pixel
+  (no ink baked in). Renders as `<svg viewBox="0 0 100 100" preserveAspectRatio="none">` +
+  `<path>` in `%`-coords + `vector-effect="non-scaling-stroke"`; %-bbox identical to 4
+  decimals across 1280/640/320 px. **SVG decisively over canvas** (vector, responsive, no
+  re-rasterize, hit-testable).
+- **Shape model ✓ — recommend freehand path first.** At-rest weight: freehand 402 B/24 pts,
+  RDP-simplified (ε=0.4%) 214 B/12 pts, rect 81 B. Recommend freehand stored
+  **RDP-simplified on seal**; primitives (rect/ellipse/arrow) later, sharing a `bounds`
+  render path.
+
+Recommended at-rest shape (`type:'drawing'`): `shape:{ kind:'path', paths:[[[xPct,yPct],…],
+…], bounds:{xPct,yPct,wPct,hPct}, strokeWidth /* css px, non-scaling */, color }` + shared
+fields; `note` **optional** (bare circle is valid); `xPct,yPct` = centroid so existing
+pin-keyed code (focus/scroll) still works; `paths[][]` makes multi-stroke = one record free.
+
+Integration points (all existing seams): `inject.js` draw mode beside `setPlacementMode` +
+a `.draw-layer` under `pinLayer` (hidden by `capture-mode`) + composer anchored to
+`shape.bounds`; `lib/capture.mjs` new `__designQA_createDrawing` binding (px → % at seal);
+`lib/coords.mjs` **no change**; `console/ui/canvas.mjs` `buildMarker` branches on `type` →
+SVG (artifact gets it free via the shared renderer); `console/ui/comments.mjs` `buildCard`
+shape thumbnail.
+
+Open questions: scroll-during-stroke is impossible by design (veil capture +
+`touch-action:none`) — off-fold strokes need a product decision (pre-scroll / pause-resume),
+not a blocker; explicit Save vs. tool-toggle-off as the seal gesture; confirm N pen cycles =
+one `paths[][]` record (the lean).
+
+---
+
+## Spike 12 — DOM-element inspector feedback *(post-DesignOS, 2026-05-31) — RESEARCH ONLY*
+
+**Framing.** The third feedback kind in the platform reframe: instead of a free pin or a
+free drawing, the reviewer **selects a specific DOM element** and attaches feedback to it.
+Shares the `type` discriminator and the comment input with the other kinds.
+
+**Question.** Can the overlay let a reviewer hover/select a live DOM element — drawing a
+precise outline rectangle around it and capturing a short, human element name — then attach
+a comment via the same input, persisting and rendering like other feedback?
+
+**Why it matters.** "This *button*," "this *card*," "this *input*" is often the most precise
+thing a reviewer can say. Anchoring feedback to an element (not a free coordinate) makes the
+engineer's "which thing?" unambiguous, and the captured element name is a breadcrumb the
+engineer recognizes.
+
+**What to probe.**
+
+- **Pick mode.** Hover highlight + click-to-select, modeled on placement mode:
+  `document.elementFromPoint(x, y)` under the cursor, draw a highlight rectangle from the
+  element's `getBoundingClientRect()`, click to lock. Must skip the overlay's own shadow UI
+  (the existing click-outside / `e.target === host` boundary logic applies).
+- **What to store — deliberately lightweight.** Per the existing **Spike 3** decision, we do
+  NOT invest in durable/resilient selectors. Store: the **bounding box as %** (so the
+  outline renders over the screenshot at rest, like a drawing's bounds) + a **shallow
+  descriptor** for the human name (tag + nearest test-id/aria-label/visible-text + maybe a
+  short class hint). The screenshot is canonical; the descriptor is a label, not a
+  re-find key. Decide whether to keep *any* selector at all or just box + name.
+- **Outline render in review.** The stored bounding box renders as an outline rectangle
+  over the screenshot (`canvas.mjs`, `%`-positioned wrapper) — same overlay-not-baked rule
+  as pins and drawings. The element name shows on the card and/or a small label on the box.
+- **Comment input reuse.** Same composer as a pin, anchored to the element box. Note is
+  expected here (the element selection is the *target*; the note is the *feedback*) — but
+  decide if a bare element selection with no note is valid.
+- **Relationship to drawing.** An element selection is essentially "a rectangle the system
+  drew for you from a real element," vs. a drawing being "a shape you drew freehand." Worth
+  deciding if they share a `bounds`-based render path with different provenance, or stay
+  distinct `type`s. Lean: distinct `type` (`'element'` vs `'drawing'`) so review can label
+  them differently, even if they share rendering primitives.
+- **Data model.** `type: 'element'` with an `element` payload (`{ bounds: {xPct,yPct,wPct,
+  hPct}, name, descriptor? }`) plus shared fields.
+- **Edge cases.** Elements larger than the viewport / scrolled partly off; overlapping
+  candidates under the cursor (depth selection?); SPA re-render between pick and screenshot
+  (the box is stored at-rest from the capture moment — acceptable, screenshot is canonical).
+
+**Done when.** A feasibility verdict + the recommended lightweight at-rest representation
+(box + name, selector decision) + integration points (pick mode, highlight, box render,
+composer reuse, `type` model) + open questions — written to double as a **Claude Design
+requirement**. Not an implementation. Hard reuse of Spike 3's "no durable selectors" stance.
+
+**POC RESULT (2026-05-31): FEASIBLE — high confidence on all four mechanics.** Throwaway
+POC validated against the real harness (`scripts/spike12-poc.mjs`, gitignored).
+
+- **Pick the element under the overlay ✓ — the crux risk is real and trivially solved.**
+  With the veil's `pointer-events:auto`, naive `elementFromPoint` hit the **veil 6/6 times**.
+  Fix (100% reliable): **toggle the veil's `pointer-events:none` for the single synchronous
+  hit-test, then restore.** Resolved the true element on every target. Works through the
+  closed shadow host; `elementsFromPoint` gives the full z-stack for optional depth-select.
+- **Bounding-box capture + normalization ✓ — ~2.3e-13 px error (float noise), DPR=2 exact.**
+  `getBoundingClientRect()` + scroll offset → normalize **both corners** through the existing
+  `pagePxToPct`, derive `wPct/hPct` as corner deltas (shares pin denominators). Box is
+  **scroll-invariant**; oversized/off-fold elements captured whole (full-page screenshot is
+  canonical).
+- **Overlay-not-baked ✓** — stored `%`-box renders as a positioned outline rect in the
+  responsive `.screenshot-wrapper`; `left%` identical across 420/720/1024 px, pixel size
+  grows proportionally. Same rule as pins; nothing rasterized into the PNG.
+- **Lightweight descriptor ✓** — priority `aria-label → visible-text → placeholder → testId
+  → nearest-testId → tag` produced recognizable names ("Create new project", "Email
+  address", "signup-card"). Gotcha: an unlabeled input surfaced its **placeholder** ("Jane
+  Doe") as the name — fine as a breadcrumb, but rank placeholder below testId or flag it.
+
+Recommended at-rest shape (`type:'element'`): `element:{ bounds:{xPct,yPct,wPct,hPct}, name,
+descriptor?:{tag,testId,text} }` + shared fields. **Selector decision: keep NO selector**
+(hard reuse of Spike 3) — `bounds` is the only render input, screenshot is canonical; `name`
+required, `descriptor` an optional shallow breadcrumb (drop aria/class/nearest-testId from
+the *persisted* form — they only help *compute* `name` at capture).
+
+Integration points: `inject.js` pick mode modeled on `setPlacementMode` + the
+`pointer-events:none`-then-restore hit-test + highlight rect (existing `e.target===host`
+boundary already skips our own UI); `lib/coords.mjs` thin `boxToPct` helper (⚠ note the
+intentional `lib/` vs `console/lib/` duplicate — change both); composer/card reuse anchored
+to the box; store threads `type` + payload (`createPin` / `__designQA_createPin`),
+default `type:'text'`.
+
+**Cross-spike synergy:** a `type:'element'` box and a rect-kind `drawing` are the *same*
+`%`-positioned rectangle render — recommend a shared `buildBoundsBox(pct)` helper that both
+call, keeping them **distinct `type`s** (so review can label provenance) while sharing the
+rendering code.
+
+Open questions: depth selection (topmost-real-element is reliable for v1; `elementsFromPoint`
+enables dig-deeper later); placeholder-as-name ranking; SPA re-render between pick and
+screenshot is fine (box stored %-at-rest, no re-find by design); bare element selection with
+no note — recommend **allow** (mirror the temp-pin deferred-create/discard); container picks
+may want an "expand to parent" affordance via the z-stack.
+
+---
+
 ## Out of scope for spikes
 
 The following are deferred per the planning conversation and should not be probed in this round:
