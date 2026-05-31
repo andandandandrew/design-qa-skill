@@ -45,6 +45,7 @@ export class ArtifactStore {
   // Inert mutations — the read-only UI never calls these; kept for interface
   // parity so the shared modules need no special-casing.
   async createPin() { return null; }
+  async createDrawing() { return null; }
   async updatePin() { return null; }
   async movePin() { return null; }
   async deletePin() { return { ok: false }; }

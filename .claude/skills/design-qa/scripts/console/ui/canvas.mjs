@@ -70,6 +70,12 @@ export function renderCanvas(ctx, root) {
     wrapper.append(buildComposer(ctx, state.composer));
   }
 
+  // Draw mode (Spike 11 on the frozen screenshot): a capture layer collects
+  // %-of-image strokes; a required-note composer seals them into a drawing.
+  if (state.drawMode && ctx.options.canPlacePins) {
+    installDrawLayer(ctx, wrapper, view);
+  }
+
   // Active comment → floating read/edit card beside its marker (DesignOS
   // comment-state cards). Full read + all editing happen here, not the sidebar.
   if (state.activePinId) {
@@ -206,23 +212,145 @@ function buildMarker(ctx, wrapper, p) {
   return m;
 }
 
-function buildComposer(ctx, composer) {
-  const input = el('input', { type: 'text', placeholder: 'Add a comment…' });
-  const submit = () => {
-    ctx.store.createPin({
-      viewId: composer.viewId, xPct: composer.xPct, yPct: composer.yPct,
-      note: input.value.trim(), author: ctx.state.author,
-    }).then((pin) => ctx.setState({ composer: null, activePinId: pin.id }));
+/**
+ * Draw mode over the frozen screenshot. A transparent capture layer collects
+ * freehand strokes as %-of-wrapper points (via pointToPct — the same units pins
+ * use), previewed live in an SVG ink layer. After the first stroke a required-
+ * note composer (anchored at the strokes' bbox centre) seals all strokes into
+ * ONE drawing record via store.createDrawing. Strokes live in this closure (not
+ * ctx.state), so the imperative live redraw never triggers a clobbering render;
+ * commit/cancel ends the mode via setState. Mirrors the live overlay's draw UX.
+ */
+function installDrawLayer(ctx, wrapper, view) {
+  const strokes = [];
+  let current = null;
+  let composerEl = null;
+
+  const ink = document.createElementNS(SVGNS, 'svg');
+  ink.setAttribute('viewBox', '0 0 100 100');
+  ink.setAttribute('preserveAspectRatio', 'none');
+  ink.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;z-index:2;';
+
+  const capture = el('div', { class: 'draw-capture' });
+  capture.style.cssText = 'position:absolute;inset:0;cursor:crosshair;z-index:3;touch-action:none;';
+
+  const redraw = () => {
+    ink.replaceChildren();
+    for (const s of (current ? [...strokes, current] : strokes)) {
+      if (!s.length) continue;
+      const path = document.createElementNS(SVGNS, 'path');
+      path.setAttribute('d', 'M ' + s.map(([x, y]) => `${x} ${y}`).join(' L '));
+      path.setAttribute('fill', 'none');
+      path.setAttribute('stroke', '#e5484d');
+      path.setAttribute('stroke-width', '3');
+      path.setAttribute('vector-effect', 'non-scaling-stroke');
+      path.setAttribute('stroke-linecap', 'round');
+      path.setAttribute('stroke-linejoin', 'round');
+      ink.appendChild(path);
+    }
   };
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); submit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); ctx.setState({ composer: null }); }
+
+  capture.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    capture.setPointerCapture?.(e.pointerId);
+    const { xPct, yPct } = pointToPct(e, wrapper);
+    current = [[xPct, yPct]];
+    redraw();
   });
-  const send = el('button', { class: 'send', title: 'Add comment', onclick: submit }, '→');
-  const pill = el('div', { class: 'composer', style: `left:${composer.xPct}%;top:${composer.yPct}%;` },
-    [input, send]);
-  requestAnimationFrame(() => input.focus());
-  return pill;
+  capture.addEventListener('pointermove', (e) => {
+    if (!current) return;
+    const { xPct, yPct } = pointToPct(e, wrapper);
+    current.push([xPct, yPct]);
+    redraw();
+  });
+  capture.addEventListener('pointerup', (e) => {
+    if (!current) return;
+    capture.releasePointerCapture?.(e.pointerId);
+    if (current.length >= 2) strokes.push(current); // drop click-not-stroke
+    current = null;
+    redraw();
+    if (strokes.length && !composerEl) openComposer();
+  });
+
+  function bboxCenter() {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const s of strokes) for (const [x, y] of s) {
+      if (x < minX) minX = x; if (y < minY) minY = y;
+      if (x > maxX) maxX = x; if (y > maxY) maxY = y;
+    }
+    if (!Number.isFinite(minX)) return { xPct: 50, yPct: 50 };
+    return { xPct: (minX + maxX) / 2, yPct: (minY + maxY) / 2 };
+  }
+
+  function openComposer() {
+    const c = bboxCenter();
+    composerEl = buildAuthoringComposer(ctx, {
+      xPct: c.xPct, yPct: c.yPct,
+      placeholder: 'Add a note for this drawing (required)…',
+      onSubmit: (note, category) => {
+        ctx.store.createDrawing({ viewId: view.id, paths: strokes, note, category: category ?? null, author: ctx.state.author })
+          .then((pin) => ctx.setState({ drawMode: false, activePinId: pin?.id || null }))
+          .catch((err) => { console.warn('design-qa: createDrawing failed', err); ctx.setState({ drawMode: false }); });
+      },
+      onCancel: () => ctx.setState({ drawMode: false }),
+    });
+    wrapper.append(composerEl);
+  }
+
+  wrapper.append(ink, capture);
+}
+
+/**
+ * Shared new-feedback composer (pin + drawing) — the DesignOS FxPinComposer,
+ * matching the browser fixture (overlay inject.js): an auto-grow `.cmt-field`
+ * textarea in a `.cmt-card.composer`, whose `.cmt-bar` footer (category control
+ * + circular send) reveals once there's ≥1 character. onSubmit(note, category)
+ * fires on Enter / send when non-empty; onCancel on Escape.
+ */
+function buildAuthoringComposer(ctx, { xPct, yPct, placeholder, onSubmit, onCancel }) {
+  let draftCategory = null;
+  const ta = el('textarea', { class: 'cmt-field', rows: '1', placeholder: placeholder || 'Add a comment…' });
+  const sendBtn = el('button', { class: 'send-btn', 'aria-disabled': 'true', title: 'Send' });
+  sendBtn.append(icon('arrowUp', 14, 2));
+  const bar = el('div', { class: 'cmt-bar hidden' }, [
+    buildCatControl(ctx, () => draftCategory, (c) => { draftCategory = c; }),
+    el('span', { class: 'bar-spacer' }),
+    sendBtn,
+  ]);
+  const card = el('div', { class: 'cmt-card composer', style: `left:${xPct}%;top:${yPct}%;` }, [ta, bar]);
+
+  const sync = () => {
+    const has = ta.value.trim().length > 0;
+    bar.classList.toggle('hidden', !has);
+    sendBtn.classList.toggle('active', has);
+    sendBtn.setAttribute('aria-disabled', has ? 'false' : 'true');
+  };
+  const submit = () => { const v = ta.value.trim(); if (v) onSubmit(v, draftCategory); };
+  ta.addEventListener('input', () => { autoGrow(ta); sync(); });
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
+  });
+  sendBtn.addEventListener('click', () => { if (sendBtn.getAttribute('aria-disabled') !== 'true') submit(); });
+  // Card interactions must not bubble to the wrapper (drop-pin / deselect / draw).
+  card.addEventListener('pointerdown', (e) => e.stopPropagation());
+  card.addEventListener('click', (e) => e.stopPropagation());
+  requestAnimationFrame(() => { ta.focus(); autoGrow(ta); sync(); });
+  return card;
+}
+
+function buildComposer(ctx, composer) {
+  return buildAuthoringComposer(ctx, {
+    xPct: composer.xPct, yPct: composer.yPct,
+    placeholder: 'Add a comment…',
+    onSubmit: (note, category) => {
+      ctx.store.createPin({
+        viewId: composer.viewId, xPct: composer.xPct, yPct: composer.yPct,
+        note, category: category ?? null, author: ctx.state.author,
+      }).then((pin) => ctx.setState({ composer: null, activePinId: pin.id }));
+    },
+    onCancel: () => ctx.setState({ composer: null }),
+  });
 }
 
 function focusMarker(root, pinId) {

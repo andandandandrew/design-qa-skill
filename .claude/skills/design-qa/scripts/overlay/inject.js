@@ -467,7 +467,9 @@
 
     /* Modal (Done / Discard confirms — native confirm() is auto-dismissed by
        Playwright, so we use a shadow-DOM modal). */
-    .modal-layer { position: fixed; inset: 0; pointer-events: none; }
+    /* Modal is the top blocking surface — above the recording indicator
+       (z-index:55), tooltips (50), menus, and toasts. */
+    .modal-layer { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
     .modal-backdrop {
       position: fixed; inset: 0; background: oklch(0 0 0 / 0.5);
       pointer-events: auto; display: flex; align-items: center; justify-content: center;
@@ -852,8 +854,13 @@
   }
 
   function placeCard(pop, pin) {
-    pop.style.left = pin.x + 'px';
-    pop.style.top = (pin.y - 24) + 'px'; // align card top with the pin bubble top
+    // Anchor the card off the SAME helper the marker bubble uses, so it sits
+    // beside the bubble for every kind. Committed drawings/elements carry no
+    // x/y (only pathsPx/boxPx until seal), so reading pin.x raw put the card at
+    // the document origin — pinAnchorPx resolves the shape centre instead.
+    const a = pinAnchorPx(pin);
+    pop.style.left = a.x + 'px';
+    pop.style.top = (a.y - 24) + 'px'; // align card top with the pin bubble top
     popoverLayer.appendChild(pop);
   }
 
@@ -1386,7 +1393,10 @@
     if (inkLayer) return inkLayer;
     inkLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     inkLayer.setAttribute('class', 'draw-ink');
-    root.appendChild(inkLayer);
+    // Insert BEFORE chrome so the draw ink paints under the chrome subtree —
+    // otherwise (as root's last child) it would cover the note composer while
+    // authoring a drawing. Order becomes: pin-layer, draw-ink, chrome.
+    root.insertBefore(inkLayer, chrome);
     return inkLayer;
   }
 
@@ -1685,6 +1695,10 @@
     if (!el) return;
     const boxPx = boxPagePx(el);
     const { name, descriptor } = describeEl(el);
+    // Hide the hover highlight now that the box is locked — its z-index:1 (which
+    // lifts it above the veil during hover) would otherwise paint over the note
+    // composer. The locked selection is shown by the .el-box in the pin layer.
+    if (pickHighlight) pickHighlight.style.display = 'none';
     const center = { x: boxPx.x + boxPx.w / 2, y: boxPx.y + boxPx.h / 2 };
     const tId = tempId();
     STATE.pickDraftId = tId;

@@ -64,6 +64,7 @@ export class HttpStore {
   }
 
   createPin(args) { return this._mutate('createPin', args); }
+  createDrawing(args) { return this._mutate('createDrawing', args); }
   updatePin(args) { return this._mutate('updatePin', args); }
   movePin(args) { return this._mutate('movePin', args); }
   resolvePin(args) { return this._mutate('resolvePin', args); }
