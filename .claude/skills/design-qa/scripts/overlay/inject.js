@@ -1391,7 +1391,10 @@
     if (inkLayer) return inkLayer;
     inkLayer = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     inkLayer.setAttribute('class', 'draw-ink');
-    root.appendChild(inkLayer);
+    // Insert BEFORE chrome so the draw ink paints under the chrome subtree —
+    // otherwise (as root's last child) it would cover the note composer while
+    // authoring a drawing. Order becomes: pin-layer, draw-ink, chrome.
+    root.insertBefore(inkLayer, chrome);
     return inkLayer;
   }
 
@@ -1690,6 +1693,10 @@
     if (!el) return;
     const boxPx = boxPagePx(el);
     const { name, descriptor } = describeEl(el);
+    // Hide the hover highlight now that the box is locked — its z-index:1 (which
+    // lifts it above the veil during hover) would otherwise paint over the note
+    // composer. The locked selection is shown by the .el-box in the pin layer.
+    if (pickHighlight) pickHighlight.style.display = 'none';
     const center = { x: boxPx.x + boxPx.w / 2, y: boxPx.y + boxPx.h / 2 };
     const tId = tempId();
     STATE.pickDraftId = tId;

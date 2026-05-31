@@ -284,44 +284,73 @@ function installDrawLayer(ctx, wrapper, view) {
 
   function openComposer() {
     const c = bboxCenter();
-    const input = el('input', { type: 'text', placeholder: 'Add a note for this drawing (required)…' });
-    const submit = () => {
-      const note = input.value.trim();
-      if (!note) return; // note is required — it's what seals the drawing
-      ctx.store.createDrawing({ viewId: view.id, paths: strokes, note, author: ctx.state.author })
-        .then((pin) => ctx.setState({ drawMode: false, activePinId: pin?.id || null }))
-        .catch((err) => { console.warn('design-qa: createDrawing failed', err); ctx.setState({ drawMode: false }); });
-    };
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); submit(); }
-      else if (e.key === 'Escape') { e.preventDefault(); ctx.setState({ drawMode: false }); }
+    composerEl = buildAuthoringComposer(ctx, {
+      xPct: c.xPct, yPct: c.yPct,
+      placeholder: 'Add a note for this drawing (required)…',
+      onSubmit: (note, category) => {
+        ctx.store.createDrawing({ viewId: view.id, paths: strokes, note, category: category ?? null, author: ctx.state.author })
+          .then((pin) => ctx.setState({ drawMode: false, activePinId: pin?.id || null }))
+          .catch((err) => { console.warn('design-qa: createDrawing failed', err); ctx.setState({ drawMode: false }); });
+      },
+      onCancel: () => ctx.setState({ drawMode: false }),
     });
-    const send = el('button', { class: 'send', title: 'Save drawing', onclick: submit }, '→');
-    composerEl = el('div', { class: 'composer', style: `left:${c.xPct}%;top:${c.yPct}%;z-index:4;` }, [input, send]);
     wrapper.append(composerEl);
-    requestAnimationFrame(() => input.focus());
   }
 
   wrapper.append(ink, capture);
 }
 
-function buildComposer(ctx, composer) {
-  const input = el('input', { type: 'text', placeholder: 'Add a comment…' });
-  const submit = () => {
-    ctx.store.createPin({
-      viewId: composer.viewId, xPct: composer.xPct, yPct: composer.yPct,
-      note: input.value.trim(), author: ctx.state.author,
-    }).then((pin) => ctx.setState({ composer: null, activePinId: pin.id }));
+/**
+ * Shared new-feedback composer (pin + drawing) — the DesignOS FxPinComposer,
+ * matching the browser fixture (overlay inject.js): an auto-grow `.cmt-field`
+ * textarea in a `.cmt-card.composer`, whose `.cmt-bar` footer (category control
+ * + circular send) reveals once there's ≥1 character. onSubmit(note, category)
+ * fires on Enter / send when non-empty; onCancel on Escape.
+ */
+function buildAuthoringComposer(ctx, { xPct, yPct, placeholder, onSubmit, onCancel }) {
+  let draftCategory = null;
+  const ta = el('textarea', { class: 'cmt-field', rows: '1', placeholder: placeholder || 'Add a comment…' });
+  const sendBtn = el('button', { class: 'send-btn', 'aria-disabled': 'true', title: 'Send' });
+  sendBtn.append(icon('arrowUp', 14, 2));
+  const bar = el('div', { class: 'cmt-bar hidden' }, [
+    buildCatControl(ctx, () => draftCategory, (c) => { draftCategory = c; }),
+    el('span', { class: 'bar-spacer' }),
+    sendBtn,
+  ]);
+  const card = el('div', { class: 'cmt-card composer', style: `left:${xPct}%;top:${yPct}%;` }, [ta, bar]);
+
+  const sync = () => {
+    const has = ta.value.trim().length > 0;
+    bar.classList.toggle('hidden', !has);
+    sendBtn.classList.toggle('active', has);
+    sendBtn.setAttribute('aria-disabled', has ? 'false' : 'true');
   };
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { e.preventDefault(); submit(); }
-    else if (e.key === 'Escape') { e.preventDefault(); ctx.setState({ composer: null }); }
+  const submit = () => { const v = ta.value.trim(); if (v) onSubmit(v, draftCategory); };
+  ta.addEventListener('input', () => { autoGrow(ta); sync(); });
+  ta.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
+    else if (e.key === 'Escape') { e.preventDefault(); onCancel?.(); }
   });
-  const send = el('button', { class: 'send', title: 'Add comment', onclick: submit }, '→');
-  const pill = el('div', { class: 'composer', style: `left:${composer.xPct}%;top:${composer.yPct}%;` },
-    [input, send]);
-  requestAnimationFrame(() => input.focus());
-  return pill;
+  sendBtn.addEventListener('click', () => { if (sendBtn.getAttribute('aria-disabled') !== 'true') submit(); });
+  // Card interactions must not bubble to the wrapper (drop-pin / deselect / draw).
+  card.addEventListener('pointerdown', (e) => e.stopPropagation());
+  card.addEventListener('click', (e) => e.stopPropagation());
+  requestAnimationFrame(() => { ta.focus(); autoGrow(ta); sync(); });
+  return card;
+}
+
+function buildComposer(ctx, composer) {
+  return buildAuthoringComposer(ctx, {
+    xPct: composer.xPct, yPct: composer.yPct,
+    placeholder: 'Add a comment…',
+    onSubmit: (note, category) => {
+      ctx.store.createPin({
+        viewId: composer.viewId, xPct: composer.xPct, yPct: composer.yPct,
+        note, category: category ?? null, author: ctx.state.author,
+      }).then((pin) => ctx.setState({ composer: null, activePinId: pin.id }));
+    },
+    onCancel: () => ctx.setState({ composer: null }),
+  });
 }
 
 function focusMarker(root, pinId) {

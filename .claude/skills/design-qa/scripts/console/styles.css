@@ -162,17 +162,28 @@ button { font-family: inherit; color: inherit; cursor: pointer; border: 0; backg
 .marker.resolved:hover { background: var(--surface-5); }
 .marker.resolved.active { box-shadow: var(--shadow-2), 0 0 0 1.5px var(--accent-ink), 0 0 0 4px var(--success-tint); }
 
-/* Composer pill for a brand-new pin — floating overlay surface. */
-.composer { position: absolute; transform: translate(0, -100%); z-index: 20;
-  display: flex; align-items: center; gap: var(--s-3); padding: 4px 4px 4px 10px;
-  background: var(--surface-overlay); border-radius: var(--r-pill);
-  box-shadow: var(--shadow-3), inset 0 0 0 1px var(--stroke-soft); }
-.composer input { background: transparent; border: none; outline: none; color: var(--ink-hi);
-  font-family: inherit; font-size: var(--fs-12); width: 260px; }
-.composer input::placeholder { color: var(--ink-lo); }
-.composer .send { width: 26px; height: 26px; border-radius: var(--r-pill); border: none;
-  background: var(--accent); color: var(--accent-ink); display: flex; align-items: center; justify-content: center; }
-.composer .send:hover { background: var(--accent-hi); }
+/* New-comment / new-drawing composer — DesignOS FxPinComposer, identical to the
+   browser fixture (overlay inject.js): an auto-grow textarea card whose footer
+   (category + circular send) reveals once there's ≥1 character. */
+.cmt-card.composer { position: absolute; transform: translate(22px, -10px); z-index: 31;
+  width: 320px; padding: 12px 14px; background: var(--surface-1); color: var(--ink-hi);
+  border-radius: var(--r-5); box-shadow: var(--shadow-4), inset 0 0 0 1px var(--stroke-soft);
+  font-family: var(--font-sans); }
+.cmt-field { all: unset; box-sizing: border-box; display: block; width: 100%;
+  font-family: inherit; font-size: 13px; line-height: 1.5; color: var(--ink-hi);
+  background: transparent; resize: none; overflow: hidden; min-height: 20px; max-height: 200px; }
+.cmt-field::placeholder { color: var(--ink-lo); }
+.cmt-bar { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.cmt-bar.hidden { display: none; }
+.bar-spacer { flex: 1; }
+button.send-btn { all: unset; cursor: pointer; width: 28px; height: 28px; border-radius: var(--r-pill);
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface-3); color: var(--ink-lo); transition: background 0.1s, color 0.1s; }
+button.send-btn:hover:not([aria-disabled="true"]) { background: var(--accent-hi); }
+button.send-btn.active { background: var(--accent); color: var(--accent-ink); }
+button.send-btn.active:hover { background: var(--accent-hi); }
+button.send-btn[aria-disabled="true"] { cursor: not-allowed; }
+button.send-btn svg { width: 14px; height: 14px; display: block; }
 
 /* Canvas comment card (read / edit) — DesignOS comment-state cards, sitting
    beside the active marker. Mirrors the browser overlay so authoring and review
