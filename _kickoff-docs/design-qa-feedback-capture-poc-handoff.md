@@ -12,8 +12,8 @@ proof-of-concept prototypes**. This is planning + POC — not the final, designe
 ## 0. Context
 
 - Repo: `/Users/andrewfrank/code/design-gen/design-qa-skill`
-- Branch at pickup: `3/planning` (the standalone-app planning-ritual proposals are already
-  committed + pushed here).
+- Branch at pickup: `main` — all planning docs (standalone-app proposals + this handoff) are
+  already merged to `main` (PR #3, merge commit `beb6989`). Branch fresh from `main`.
 
 `/design-qa` is reframing from a *commenting* tool to a **feedback platform**: a pinned text
 note is just ONE kind of feedback. We're adding two more capture methods, unified by a `type`
@@ -76,10 +76,17 @@ Memory: `architecture_decisions.md`, `backlog_post_demo.md`, `designos_reference
 
 1. Enter plan mode; explore the seams above; pressure-test the POC approach.
 2. Use `AskUserQuestion` on the genuine forks.
-3. Write planning document(s) into `_kickoff-docs/` (propose names) and save them on the
-   `3/planning` branch.
-4. Commit, then **open a PR for `3/planning` → `main` and merge it.**
-5. Start the actual POC implementation work in a **new branch** off the freshly-merged `main`.
+3. Branch a short-lived planning branch off `main` (e.g. `4/feedback-capture-poc-plan`); write
+   the planning document(s) into `_kickoff-docs/` (propose names) and commit there.
+4. **Open a PR for that planning branch → `main` and merge it as a real merge commit** (the docs
+   are distinct reference artifacts — don't squash).
+5. Start the actual POC implementation in a **new short-lived branch per capture method** off the
+   freshly-merged `main` (e.g. `5/poc-drawing`, then `6/poc-element` — one method at a time, each
+   tested in isolation per the feedback-platform §7 plan). **Squash-merge** these implementation
+   branches so each lands on `main` as one clean, revertable commit.
+
+> Merge-strategy rule for this project: **curated branches (docs/planning) → real merge;
+> implementation branches → squash-merge.** Keep branches short-lived; delete on merge.
 
 ## 5. Values that govern every call
 
