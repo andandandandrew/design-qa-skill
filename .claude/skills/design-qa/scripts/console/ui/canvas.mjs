@@ -44,6 +44,12 @@ export function renderCanvas(ctx, root) {
   wrapper.append(img);
 
   for (const p of ctx.visiblePins(view)) {
+    // Feedback-platform: non-text records render their shape as an overlay
+    // BENEATH the numbered marker bubble (SVG path for drawings; element box
+    // lands in the element POC). The bubble — positioned at the shape centroid —
+    // stays the select/focus affordance for every type.
+    const shape = buildShapeOverlay(ctx, p);
+    if (shape) wrapper.append(shape);
     wrapper.append(buildMarker(ctx, wrapper, p));
   }
 
@@ -85,10 +91,52 @@ function pointToPct(e, wrapper) {
   };
 }
 
+// SVGNS — drawings render as a vector path layer over the responsive
+// screenshot wrapper. preserveAspectRatio:none + a 0..100 viewBox makes the
+// %-coords map straight onto the wrapper at any size; non-scaling-stroke keeps
+// the line a constant on-screen weight. Inline-styled so the exported artifact
+// renders identically without shipping new CSS.
+const SVGNS = 'http://www.w3.org/2000/svg';
+
+/** Per-type shape overlay beneath the marker bubble. null for text pins. */
+function buildShapeOverlay(ctx, p) {
+  if (p.type === 'drawing' && p.shape?.paths?.length) return buildDrawingSvg(ctx, p);
+  return null;
+}
+
+function buildDrawingSvg(ctx, p) {
+  const resolved = p.status === 'resolved';
+  const sh = p.shape;
+  const svg = document.createElementNS(SVGNS, 'svg');
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('preserveAspectRatio', 'none');
+  svg.setAttribute('class', `drawing-overlay ${p.id === ctx.state.activePinId ? 'active' : ''} ${resolved ? 'resolved' : ''}`);
+  svg.dataset.id = p.id;
+  svg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;overflow:visible;pointer-events:none;';
+  const stroke = resolved ? 'var(--ink-mid, #8a93a6)' : (sh.color || '#e5484d');
+  for (const pts of sh.paths) {
+    if (!pts.length) continue;
+    const path = document.createElementNS(SVGNS, 'path');
+    path.setAttribute('d', 'M ' + pts.map(([x, y]) => `${x} ${y}`).join(' L '));
+    path.setAttribute('fill', 'none');
+    path.setAttribute('stroke', stroke);
+    path.setAttribute('stroke-width', String(sh.strokeWidth || 3));
+    path.setAttribute('vector-effect', 'non-scaling-stroke');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    svg.appendChild(path);
+  }
+  return svg;
+}
+
 function buildMarker(ctx, wrapper, p) {
   const { store, state } = ctx;
   const resolved = p.status === 'resolved';
-  const movable = ctx.options.canPlacePins; // repositioning is a placement op
+  // Repositioning is a placement op — and only meaningful for a point pin.
+  // Non-text records (drawing/element) anchor to a shape, so they're select-
+  // only: dragging the centroid bubble would desync it from the ink/box.
+  const isPoint = p.type === 'text' || p.type === undefined;
+  const movable = ctx.options.canPlacePins && isPoint;
   const m = el('div', {
     class: `marker ${p.id === state.activePinId ? 'active' : ''} ${resolved ? 'resolved' : ''} ${movable ? '' : 'no-move'}`,
     dataset: { id: p.id },
