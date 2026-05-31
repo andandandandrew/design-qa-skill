@@ -49,6 +49,24 @@ export function imagePxToPct({ clickX, clickY, renderedWidth, renderedHeight }) 
 }
 
 /**
+ * Element-box (Spike 12) → %-at-rest. Normalize BOTH page-px corners through
+ * pagePxToPct (so wPct/hPct share the pin denominators exactly), yielding a
+ * %-rect that renders as an outline over the responsive screenshot.
+ * (Intentional duplicate of lib/coords.mjs boxToPct — buildless, no shared
+ * bundle; change both copies together.)
+ */
+export function boxToPct({ x, y, w, h, viewportWidth, shotWidth, shotHeight }) {
+  const tl = pagePxToPct({ x, y, viewportWidth, shotWidth, shotHeight });
+  const br = pagePxToPct({ x: x + w, y: y + h, viewportWidth, shotWidth, shotHeight });
+  return {
+    xPct: tl.xPct,
+    yPct: tl.yPct,
+    wPct: clampPct(br.xPct - tl.xPct),
+    hPct: clampPct(br.yPct - tl.yPct),
+  };
+}
+
+/**
  * Read PNG intrinsic dimensions from a buffer without decoding the image.
  * PNG: 8-byte signature, 4-byte IHDR length, 4-byte "IHDR", then width (BE u32)
  * at byte 16 and height (BE u32) at byte 20.

@@ -28,6 +28,23 @@ export function pagePxToPct({ x, y, viewportWidth, shotWidth, shotHeight }) {
   };
 }
 
+/**
+ * Element-box (Spike 12) → %-at-rest. Normalize BOTH page-px corners through
+ * pagePxToPct (so wPct/hPct share the pin denominators exactly), yielding a
+ * %-rect that renders as an outline over the responsive screenshot. Box is in
+ * page-CSS px (getBoundingClientRect + scroll offset), like a pin's x/y.
+ */
+export function boxToPct({ x, y, w, h, viewportWidth, shotWidth, shotHeight }) {
+  const tl = pagePxToPct({ x, y, viewportWidth, shotWidth, shotHeight });
+  const br = pagePxToPct({ x: x + w, y: y + h, viewportWidth, shotWidth, shotHeight });
+  return {
+    xPct: tl.xPct,
+    yPct: tl.yPct,
+    wPct: clampPct(br.xPct - tl.xPct),
+    hPct: clampPct(br.yPct - tl.yPct),
+  };
+}
+
 /** PNG intrinsic dimensions without decoding (width@16, height@20, BE u32). */
 export function pngDimensions(buf) {
   if (!buf || buf.length < 24) return { width: 0, height: 0 };

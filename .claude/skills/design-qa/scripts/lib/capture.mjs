@@ -356,11 +356,13 @@ export async function attachCapture(store, {
         id: view.id,
         url: view.url,
         name: view.name,
-        // type + pathsPx let the live overlay re-render committed drawings
-        // (which carry no x/y until seal) from their working px strokes.
+        // type + pathsPx + boxPx/element let the live overlay re-render
+        // committed drawings + element boxes (which carry no x/y until seal)
+        // from their working px geometry.
         pins: view.pins.map((p) => ({
           id: p.id, type: p.type ?? 'text', x: p.x, y: p.y, note: p.note,
           pathsPx: p.pathsPx ?? null,
+          boxPx: p.boxPx ?? null, element: p.element ?? null,
           category: p.category ?? null, author: p.author ?? null,
           status: p.status ?? 'open', createdAt: p.createdAt ?? null,
         })),
@@ -514,6 +516,17 @@ export async function attachCapture(store, {
     if (view && !view.screenshot) await takeScreenshotFor(viewId, page, { fullPage: true });
     else scheduleScreenshot(viewId, page);
     return { pinId: drawing.id };
+  });
+
+  // Spike 12: create an element-selection feedback record. The page-px box
+  // (boxPx) normalizes to element.bounds at seal, like a drawing's strokes.
+  await context.exposeBinding('__designQA_createElement', async ({ page }, { viewId, boxPx, name, descriptor, note, category }) => {
+    const rec = await store.createElement({ viewId, boxPx, name, descriptor, note, category });
+    viewPages.set(viewId, page);
+    const view = store.findViewById(viewId);
+    if (view && !view.screenshot) await takeScreenshotFor(viewId, page, { fullPage: true });
+    else scheduleScreenshot(viewId, page);
+    return { pinId: rec.id };
   });
 
   await context.exposeBinding('__designQA_updatePin', async ({ page }, { pinId, note, x, y, category }) => {

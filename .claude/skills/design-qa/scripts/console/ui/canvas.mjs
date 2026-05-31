@@ -101,7 +101,32 @@ const SVGNS = 'http://www.w3.org/2000/svg';
 /** Per-type shape overlay beneath the marker bubble. null for text pins. */
 function buildShapeOverlay(ctx, p) {
   if (p.type === 'drawing' && p.shape?.paths?.length) return buildDrawingSvg(ctx, p);
+  if (p.type === 'element' && p.element?.bounds) return buildBoundsBox(ctx, p);
   return null;
+}
+
+// Shared %-positioned rectangle primitive: an element selection box (and, later,
+// a rect-kind drawing) render through this. Outline + optional name label,
+// inline-styled so the artifact renders it without new CSS. Non-interactive —
+// the centroid marker bubble owns selection.
+function buildBoundsBox(ctx, p) {
+  const b = p.element.bounds;
+  const resolved = p.status === 'resolved';
+  const color = resolved ? 'var(--ink-mid, #8a93a6)' : '#4f8cff';
+  const box = el('div', {
+    class: `bounds-box ${p.id === ctx.state.activePinId ? 'active' : ''} ${resolved ? 'resolved' : ''}`,
+    dataset: { id: p.id },
+    style: `position:absolute;left:${b.xPct}%;top:${b.yPct}%;width:${b.wPct}%;height:${b.hPct}%;` +
+      `box-sizing:border-box;border:2px solid ${color};background:${resolved ? 'transparent' : 'rgba(79,140,255,.08)'};` +
+      'border-radius:4px;pointer-events:none;',
+  });
+  if (p.element.name) {
+    box.append(el('span', {
+      style: `position:absolute;top:-18px;left:0;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;` +
+        `font-size:10px;line-height:16px;background:${color};color:#fff;padding:0 5px;border-radius:3px;`,
+    }, p.element.name));
+  }
+  return box;
 }
 
 function buildDrawingSvg(ctx, p) {

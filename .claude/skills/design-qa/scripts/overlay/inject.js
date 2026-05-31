@@ -53,6 +53,11 @@
     drawMode: false,
     draftStrokes: [],
     drawDraftId: null,
+    // Spike 12 (element inspector): pick mode highlights the element under the
+    // cursor and locks it on click; `pickDraftId` is the temp-pin id whose
+    // composer collects the REQUIRED note that seals the element selection.
+    pickMode: false,
+    pickDraftId: null,
     // Spike 8: recorder state pushed from Node via __designQA_setRecorderState.
     // `active` flips at Mark-start; `count` is total post-Mark-start steps
     // across all views; `startedAtMs` is the Node wall clock at Mark-start;
@@ -170,6 +175,30 @@
     .draw-ink { position: absolute; top: 0; left: 0; pointer-events: none; overflow: visible; }
     .draw-ink path { fill: none; stroke: #e5484d; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
     .draw-ink path.muted { stroke: var(--ink-mid, #8a93a6); }
+
+    /* Spike 12 pick mode: a catch veil (like draw mode) + a viewport-fixed
+       highlight rect that tracks the element under the cursor. Committed element
+       selections render as %-free page-px boxes in the pin layer (hidden at
+       capture, like pins/ink). */
+    .pick-veil {
+      position: fixed; inset: 0; pointer-events: auto; cursor: crosshair;
+      background: oklch(0.15 0.01 250 / 0.08);
+    }
+    .pick-highlight {
+      position: fixed; pointer-events: none; box-sizing: border-box;
+      border: 2px solid #4f8cff; background: oklch(0.62 0.19 256 / 0.12);
+      border-radius: 4px; z-index: 1;
+    }
+    .pick-highlight .pick-label {
+      position: absolute; top: -18px; left: 0; max-width: 240px; overflow: hidden;
+      text-overflow: ellipsis; white-space: nowrap;
+      font: 600 10px/16px var(--font-sans); background: #4f8cff; color: #fff;
+      padding: 0 5px; border-radius: 3px;
+    }
+    .el-box {
+      position: absolute; box-sizing: border-box; pointer-events: none;
+      border: 2px solid #4f8cff; background: oklch(0.62 0.19 256 / 0.10); border-radius: 4px;
+    }
 
     /* ── Mini-toolbar pill (top-center by default, draggable) ─────────── */
     .toolbar {
@@ -511,6 +540,8 @@
   const ICON_MORE = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>';
   const ICON_CHECK = ic('<path d="M20 6 9 17l-5-5"/>', 2.2);
   const ICON_PENCIL = ic('<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>');
+  // lucide square-mouse-pointer — element inspector (Spike 12).
+  const ICON_INSPECT = ic('<path d="M5 3a2 2 0 0 0-2 2"/><path d="M19 3a2 2 0 0 1 2 2"/><path d="M5 21a2 2 0 0 1-2-2"/><path d="M9 3h1"/><path d="M9 21h2"/><path d="M3 9v1"/><path d="M21 9v2"/><path d="M3 14v1"/><path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z"/>');
 
   // ------- Toolbar ------------------------------------------------------
 
@@ -522,6 +553,7 @@
     <span class="tb-cluster">
       <span class="tb-ibtn" id="commentBtn" title="Comment — click, then click on the page">${ICON_COMMENT}</span>
       <span class="tb-ibtn" id="drawBtn" title="Draw — mark up the page, then add a required note">${ICON_PENCIL}</span>
+      <span class="tb-ibtn" id="pickBtn" title="Inspect — pick an element on the page, then add a required note">${ICON_INSPECT}</span>
       <span class="tb-ibtn" id="newScreenBtn" title="New screen — seal this screen's comments and start a fresh, separate set of pins on this page">${ICON_PLUS}</span>
     </span>
     <span class="tb-divider"></span>
@@ -582,6 +614,7 @@
         STATE.pins = view.pins.map((p) => ({
           id: p.id, type: p.type ?? 'text', x: p.x, y: p.y, note: p.note,
           pathsPx: p.pathsPx ?? null,
+          boxPx: p.boxPx ?? null, element: p.element ?? null,
           category: p.category ?? null, author: p.author ?? null,
           status: p.status ?? 'open', createdAt: p.createdAt ?? null,
         }));
@@ -652,12 +685,25 @@
   function pinAnchorPx(pin) {
     if (typeof pin.x === 'number' && !Number.isNaN(pin.x)) return { x: pin.x, y: pin.y };
     if (Array.isArray(pin.pathsPx)) return strokesBBoxCenterPx(pin.pathsPx);
+    if (pin.boxPx) return { x: pin.boxPx.x + pin.boxPx.w / 2, y: pin.boxPx.y + pin.boxPx.h / 2 };
     return { x: 0, y: 0 };
   }
 
   function renderPins() {
     pinLayer.innerHTML = '';
     STATE.pins.forEach((pin, i) => {
+      // Element selections render their captured box (page-px) beneath the
+      // bubble — hidden at capture with the rest of the pin layer.
+      if (pin.type === 'element' && pin.boxPx) {
+        const b = pin.boxPx;
+        const box = document.createElement('div');
+        box.className = 'el-box';
+        box.style.left = b.x + 'px';
+        box.style.top = b.y + 'px';
+        box.style.width = b.w + 'px';
+        box.style.height = b.h + 'px';
+        pinLayer.appendChild(box);
+      }
       const el = document.createElement('div');
       el.className = 'pin' + (pin.id === STATE.activePinId ? ' active' : '');
       // Anchor: pin's bottom-left tail tip at (x, y). Element's box top-left
@@ -686,9 +732,9 @@
         startPinX: pin.x, startPinY: pin.y,
         moved: false,
         popoverWasOpen: STATE.activePinId === pin.id,
-        // Drawings anchor to a shape; dragging the centroid bubble would desync
-        // it from the ink, so they're select-only (like a sealed pin).
-        canDrag: !String(pin.id).startsWith(TEMP_PREFIX) && pin.type !== 'drawing',
+        // Drawings + element boxes anchor to a shape; dragging the centroid
+        // bubble would desync it from the ink/box, so they're select-only.
+        canDrag: !String(pin.id).startsWith(TEMP_PREFIX) && pin.type !== 'drawing' && pin.type !== 'element',
       };
     });
 
@@ -830,11 +876,13 @@
     const sendBtn = pop.querySelector('.send-btn');
     pop.querySelector('.cat-slot').appendChild(
       buildCategoryControl(() => draftCategory, (c) => { draftCategory = c; }));
-    // Spike 11: a drawing's note is REQUIRED and is what seals the record —
-    // signal that in the placeholder. Send routes to commitDrawing; Escape
-    // discards the whole in-progress drawing (not just the popover).
+    // Spikes 11/12: a drawing's / element's note is REQUIRED and is what seals
+    // the record — signal that in the placeholder. Send routes to the matching
+    // commit; Escape discards the whole in-progress draft (not just the popover).
     const isDrawing = pin.kind === 'drawing';
+    const isElement = pin.kind === 'element';
     if (isDrawing) ta.placeholder = 'Add a note for this drawing (required)…';
+    else if (isElement) ta.placeholder = `Add a note for "${pin.element?.name || 'this element'}" (required)…`;
     ta.value = pin.note || '';
     autoGrow(ta);
     ta.focus();
@@ -850,12 +898,18 @@
     const send = () => {
       if (!ta.value.trim()) return;
       if (isDrawing) commitDrawing(pin, ta.value, draftCategory);
+      else if (isElement) commitElement(pin, ta.value, draftCategory);
       else commitTempPin(pin, ta.value, draftCategory);
     };
     ta.addEventListener('input', () => { autoGrow(ta); sync(); });
     ta.addEventListener('keydown', (e) => {
       if ((e.key === 'Enter' && !e.shiftKey) || ((e.metaKey || e.ctrlKey) && e.key === 'Enter')) { e.preventDefault(); send(); return; }
-      if (e.key === 'Escape') { e.preventDefault(); isDrawing ? cancelDraw() : closePopoverIfOpen(); }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (isDrawing) cancelDraw();
+        else if (isElement) cancelPick();
+        else closePopoverIfOpen();
+      }
     });
     sendBtn.addEventListener('click', () => { if (sendBtn.getAttribute('aria-disabled') !== 'true') send(); });
   }
@@ -1274,6 +1328,7 @@
 
   function setPlacementMode(on) {
     if (on && STATE.drawMode) setDrawMode(false); // modes are mutually exclusive
+    if (on && STATE.pickMode) setPickMode(false);
     STATE.placementMode = on;
     const btn = $('commentBtn');
     if (btn) {
@@ -1381,6 +1436,7 @@
 
   function setDrawMode(on) {
     if (on && STATE.placementMode) setPlacementMode(false); // mutually exclusive
+    if (on && STATE.pickMode) setPickMode(false);
     STATE.drawMode = on;
     const btn = $('drawBtn');
     if (btn) {
@@ -1509,6 +1565,195 @@
     await reloadActiveViewPins();
   }
 
+  // ------- Pick mode (Spike 12 — element inspector) ---------------------
+  //
+  // A catch veil highlights the element under the cursor (hit-tested by briefly
+  // toggling the veil's pointer-events off — the POC-proven crux fix) and locks
+  // it on click. We capture the page-px bounding box + a lightweight human name
+  // (NO durable selector; NEVER an input's typed value), then the reused
+  // composer collects the REQUIRED note that seals the selection.
+
+  let pickVeil = null;
+  let pickHighlight = null;
+  let pickHoverEl = null; // the page element currently under the cursor
+
+  // Lightweight descriptor (Spike 3 stance: a breadcrumb, not a re-find key).
+  // Name priority: aria-label → visible text → placeholder → testId →
+  // nearest-testId → tag. NEVER reads `.value` (keeps typed secrets out).
+  function describeEl(el) {
+    if (!el || !el.tagName) return { name: 'element', descriptor: null };
+    const tag = el.tagName.toLowerCase();
+    const aria = el.getAttribute && el.getAttribute('aria-label');
+    const placeholder = el.getAttribute && el.getAttribute('placeholder');
+    const testId = el.getAttribute && el.getAttribute('data-testid');
+    let text = (el.textContent || '').trim().replace(/\s+/g, ' ');
+    if (text.length > 40) text = text.slice(0, 39) + '…';
+    let nearestTestId = null;
+    for (let n = el, i = 0; n && i < 4; n = n.parentElement, i++) {
+      const tid = n.getAttribute && n.getAttribute('data-testid');
+      if (tid) { nearestTestId = tid; break; }
+    }
+    let name;
+    if (aria) name = aria;
+    else if (text && tag !== 'div' && tag !== 'section' && tag !== 'span') name = text;
+    else if (placeholder) name = placeholder;
+    else if (testId) name = testId;
+    else if (nearestTestId) name = nearestTestId;
+    else name = tag;
+    // Persisted descriptor stays minimal: tag + testId + short text breadcrumb.
+    return { name, descriptor: { tag, testId: testId || null, text: text || null } };
+  }
+
+  function boxPagePx(el) {
+    const r = el.getBoundingClientRect();
+    return { x: r.left + window.scrollX, y: r.top + window.scrollY, w: r.width, h: r.height };
+  }
+
+  // Resolve the page element under (clientX, clientY) by blinding the veil for a
+  // single synchronous hit-test, then restoring. Skips our own overlay (closed
+  // shadow → elementFromPoint reports the host, never inner UI).
+  function hitTestUnderVeil(clientX, clientY) {
+    if (!pickVeil) return null;
+    const prev = pickVeil.style.pointerEvents;
+    pickVeil.style.pointerEvents = 'none';
+    const el = document.elementFromPoint(clientX, clientY);
+    pickVeil.style.pointerEvents = prev || 'auto';
+    if (!el || el === host) return null;
+    return el;
+  }
+
+  function moveHighlight(el) {
+    if (!pickHighlight) return;
+    if (!el) { pickHighlight.style.display = 'none'; pickHoverEl = null; return; }
+    pickHoverEl = el;
+    const r = el.getBoundingClientRect();
+    pickHighlight.style.display = 'block';
+    pickHighlight.style.left = r.left + 'px';
+    pickHighlight.style.top = r.top + 'px';
+    pickHighlight.style.width = r.width + 'px';
+    pickHighlight.style.height = r.height + 'px';
+    const { name } = describeEl(el);
+    pickHighlight.firstChild.textContent = name;
+  }
+
+  function setPickMode(on) {
+    if (on && STATE.placementMode) setPlacementMode(false); // mutually exclusive
+    if (on && STATE.drawMode) setDrawMode(false);
+    STATE.pickMode = on;
+    const btn = $('pickBtn');
+    if (btn) {
+      btn.classList.toggle('active', on);
+      btn.title = on ? 'Exit inspect mode (Esc)' : 'Inspect — pick an element on the page, then add a required note';
+    }
+    if (on) {
+      STATE.pickDraftId = null;
+      pickVeil = document.createElement('div');
+      pickVeil.className = 'pick-veil';
+      pickHighlight = document.createElement('div');
+      pickHighlight.className = 'pick-highlight';
+      pickHighlight.style.display = 'none';
+      pickHighlight.appendChild(Object.assign(document.createElement('span'), { className: 'pick-label' }));
+      pickVeil.addEventListener('pointermove', onPickMove);
+      pickVeil.addEventListener('click', onPickClick, { capture: true });
+      pickVeil.addEventListener('contextmenu', (e) => { e.preventDefault(); cancelPick(); });
+      window.addEventListener('keydown', pickEscCancel, { capture: true });
+      chrome.insertBefore(pickVeil, chrome.firstChild);
+      chrome.insertBefore(pickHighlight, chrome.firstChild);
+    } else {
+      if (pickVeil) { pickVeil.remove(); pickVeil = null; }
+      if (pickHighlight) { pickHighlight.remove(); pickHighlight = null; }
+      window.removeEventListener('keydown', pickEscCancel, { capture: true });
+      pickHoverEl = null;
+      STATE.pickDraftId = null;
+    }
+  }
+
+  function pickEscCancel(e) {
+    if (e.key === 'Escape') { e.preventDefault(); cancelPick(); }
+  }
+
+  function onPickMove(e) {
+    if (STATE.pickDraftId) return; // already locked + composing; freeze the highlight
+    moveHighlight(hitTestUnderVeil(e.clientX, e.clientY));
+  }
+
+  function onPickClick(e) {
+    if (STATE.pickDraftId) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const el = hitTestUnderVeil(e.clientX, e.clientY);
+    if (!el) return;
+    const boxPx = boxPagePx(el);
+    const { name, descriptor } = describeEl(el);
+    const center = { x: boxPx.x + boxPx.w / 2, y: boxPx.y + boxPx.h / 2 };
+    const tId = tempId();
+    STATE.pickDraftId = tId;
+    STATE.pins.push({
+      id: tId, kind: 'element', type: 'element',
+      x: center.x, y: center.y, boxPx,
+      element: { name, descriptor }, note: '', category: null,
+    });
+    STATE.activePinId = tId;
+    STATE.editing = false;
+    renderPins();
+    renderPopover();
+  }
+
+  function cancelPick() {
+    const id = STATE.pickDraftId;
+    if (id) {
+      STATE.pins = STATE.pins.filter((p) => p.id !== id);
+      STATE.activePinId = null;
+      STATE.editing = false;
+    }
+    setPickMode(false);
+    renderPins();
+    renderPopover();
+  }
+
+  // Seal the locked element: lazy-create the view, persist the box + name +
+  // descriptor + required note as one element record, then exit pick mode.
+  async function commitElement(draftPin, note, category) {
+    const tempIdVal = draftPin.id;
+    const boxPx = draftPin.boxPx;
+    const el = draftPin.element || {};
+    if (!STATE.viewId) {
+      try {
+        const result = await window.__designQA_ensureView({
+          url: location.href,
+          title: document.title || location.href,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        });
+        STATE.viewId = result.viewId;
+      } catch (e) {
+        console.warn('design-qa: ensureView failed', e);
+        cancelPick();
+        return;
+      }
+    }
+    try {
+      const { pinId } = await window.__designQA_createElement({
+        viewId: STATE.viewId, boxPx, name: el.name, descriptor: el.descriptor,
+        note, category: category || null,
+      });
+      draftPin.id = pinId;
+      draftPin.note = note;
+      draftPin.category = category || null;
+      delete draftPin.kind;
+      draftPin.type = 'element';
+    } catch (e) {
+      console.warn('design-qa: createElement failed', e);
+      STATE.pins = STATE.pins.filter((p) => p.id !== tempIdVal);
+    }
+    STATE.pickDraftId = null;
+    STATE.activePinId = null;
+    STATE.editing = false;
+    setPickMode(false);
+    renderPins();
+    renderPopover();
+    await reloadActiveViewPins();
+  }
+
   // ------- Toolbar drag -------------------------------------------------
 
   let dragRef = null;
@@ -1604,7 +1849,7 @@
     return new Promise((resolve) => {
       const need = [
         '__designQA_loadForUrl', '__designQA_ensureView', '__designQA_createPin',
-        '__designQA_createDrawing',
+        '__designQA_createDrawing', '__designQA_createElement',
         '__designQA_updatePin', '__designQA_deletePin', '__designQA_startNewView',
         '__designQA_sealCurrentView', '__designQA_markStart', '__designQA_stopRecording',
         '__designQA_discardRecording', '__designQA_fetchRecorderSteps',
@@ -1644,6 +1889,7 @@
     const id = e.target?.closest?.('[id]')?.id;
     if (id === 'commentBtn') { setPlacementMode(!STATE.placementMode); return; }
     if (id === 'drawBtn') { setDrawMode(!STATE.drawMode); return; }
+    if (id === 'pickBtn') { setPickMode(!STATE.pickMode); return; }
     if (id === 'newScreenBtn') { requestNewScreen(); return; }
     if (id === 'recBtn') { onRecToggle(); return; }
     if (id === 'doneBtn') { requestDone(); return; }
