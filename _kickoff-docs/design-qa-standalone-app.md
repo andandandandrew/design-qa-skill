@@ -103,6 +103,9 @@ adapter (`console/store/*`), the shared render modules (`canvas.mjs` / `comments
 
 ## Related
 
+- `_kickoff-docs/design-qa-standalone-app-handoff.md` — **the handoff prompt that kicks off
+  the planning ritual** to produce the first migration proposals (architecture + toolchain,
+  migration/sequencing, skill-workflow changes). Start there when picking this up.
 - `_kickoff-docs/design-qa-feedback-platform.md` — the feature expansion this sequences after.
 - `_kickoff-docs/design-qa-spikes.md` §Spike 7 — the export/bundle decisions + the
   `file://` constraint history.
