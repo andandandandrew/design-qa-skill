@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { sessionSubPaths } from './paths.mjs';
-import { pagePxToPct, pngDimensions, clampPct } from './coords.mjs';
+import { pagePxToPct, pngDimensions, clampPct, boxToPct } from './coords.mjs';
 
 const SCHEMA_VERSION = 4;
 
@@ -129,6 +129,24 @@ function normalizeDrawing(p, { viewportWidth, shotWidth, shotHeight }) {
 }
 
 /**
+ * Element seal (Spike 12): convert a record's working page-px `boxPx` to the
+ * canonical %-`element.bounds` via boxToPct (the same DPR-aware transform pins
+ * ride, applied to both corners). Sets `xPct/yPct` to the box centre for marker
+ * focus, then drops `boxPx`. `element.name`/`descriptor` were captured live at
+ * pick time and are left untouched.
+ */
+function normalizeElement(p, { viewportWidth, shotWidth, shotHeight }) {
+  const b = boxToPct({ ...p.boxPx, viewportWidth, shotWidth, shotHeight });
+  p.element = p.element || {};
+  p.element.bounds = {
+    xPct: round3(b.xPct), yPct: round3(b.yPct), wPct: round3(b.wPct), hPct: round3(b.hPct),
+  };
+  p.xPct = clampPct(b.xPct + b.wPct / 2);
+  p.yPct = clampPct(b.yPct + b.hPct / 2);
+  delete p.boxPx;
+}
+
+/**
  * Compute %-of-image coords for a view's pins from its (final) screenshot.
  * Additive: leaves px x/y in place as the live overlay's working coords and
  * sets xPct/yPct as the canonical at-rest position. Browser pins only — manual
@@ -147,6 +165,10 @@ async function normalizeViewPins(sessionDir, view) {
   for (const p of view.pins) {
     if (p.type === 'drawing' && Array.isArray(p.pathsPx)) {
       normalizeDrawing(p, { viewportWidth: vp.width, shotWidth, shotHeight });
+      continue;
+    }
+    if (p.type === 'element' && p.boxPx) {
+      normalizeElement(p, { viewportWidth: vp.width, shotWidth, shotHeight });
       continue;
     }
     if (typeof p.x !== 'number' || typeof p.y !== 'number') continue;
@@ -388,6 +410,42 @@ export class SessionStore {
       viewId,
       type: 'drawing',
       pathsPx,            // working page-px strokes; → %-shape at seal
+      note: trimmedNote,
+      category,
+      author: stampedAuthor,
+      status: 'open',
+      resolvedNote: null,
+      createdAt: new Date().toISOString(),
+    };
+    view.pins.push(pin);
+    await this.persist();
+    return pin;
+  }
+
+  /**
+   * Create an element-selection feedback record (Spike 12). Live-browser path:
+   * a page-px bounding box (`boxPx` = getBoundingClientRect + scroll) normalizes
+   * to `element.bounds` (%) at sealView via normalizeElement. `name` +
+   * `descriptor` are the human breadcrumb captured at pick time (NO durable
+   * selector — Spike 3). A note is REQUIRED (settled commit rule). The
+   * descriptor must never carry an input's typed value (set capture-side).
+   */
+  async createElement({ viewId, boxPx, name, descriptor = null, note, category = null, author }) {
+    const view = this.findViewById(viewId);
+    if (!view) throw new Error(`view ${viewId} not found`);
+    if (view.sealedAt) throw new Error(`view ${viewId} is sealed`);
+    if (!boxPx || typeof boxPx.w !== 'number' || typeof boxPx.h !== 'number') {
+      throw new Error('element requires a bounding box');
+    }
+    const trimmedNote = typeof note === 'string' ? note.trim() : '';
+    if (!trimmedNote) throw new Error('element requires a note');
+    const stampedAuthor = author ?? this.doc.author?.name ?? null;
+    const pin = {
+      id: newId('pin'),
+      viewId,
+      type: 'element',
+      boxPx,              // working page-px box; → element.bounds at seal
+      element: { name: name || descriptor?.tag || 'element', descriptor: descriptor || null },
       note: trimmedNote,
       category,
       author: stampedAuthor,
