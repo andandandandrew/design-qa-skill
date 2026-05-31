@@ -467,7 +467,9 @@
 
     /* Modal (Done / Discard confirms — native confirm() is auto-dismissed by
        Playwright, so we use a shadow-DOM modal). */
-    .modal-layer { position: fixed; inset: 0; pointer-events: none; }
+    /* Modal is the top blocking surface — above the recording indicator
+       (z-index:55), tooltips (50), menus, and toasts. */
+    .modal-layer { position: fixed; inset: 0; pointer-events: none; z-index: 100; }
     .modal-backdrop {
       position: fixed; inset: 0; background: oklch(0 0 0 / 0.5);
       pointer-events: auto; display: flex; align-items: center; justify-content: center;
