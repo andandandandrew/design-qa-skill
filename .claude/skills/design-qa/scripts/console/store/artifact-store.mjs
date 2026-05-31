@@ -1,5 +1,5 @@
 import { createEmitter } from '../lib/events.mjs';
-import { applySavedResolves, saveResolvesFromSession } from './local-resolve.mjs';
+import { applySavedResolves, saveResolvedPin } from './local-resolve.mjs';
 
 /**
  * The exported artifact's persistence seam — same interface as MemoryStore /
@@ -8,11 +8,14 @@ import { applySavedResolves, saveResolvesFromSession } from './local-resolve.mjs
  *
  * The artifact is read-mostly: an engineer can view, filter, sort, and
  * RESOLVE (with an optional completion note). Resolve persists to LocalStorage
- * via the shared `local-resolve` helper (also used by the console's lookback
- * view of archived sessions) so reloads see prior marks. The designer-side
- * resolve in session.json stays separate; see the architecture doc's "two
- * layers of resolve". All non-resolve mutations are inert: the UI gates them
- * off, and these no-ops are a belt-and-suspenders backstop.
+ * via the `local-resolve` helper — the artifact is the one surface with no
+ * server to write through (the live console and lookback views persist to the
+ * real session.json instead). Only pins the engineer actually toggles here are
+ * recorded, so a re-exported artifact's fresher embedded status wins for any
+ * pin left untouched. The designer-side resolve in session.json stays separate;
+ * see the architecture doc's "two layers of resolve". All non-resolve mutations
+ * are inert: the UI gates them off, and these no-ops are a belt-and-suspenders
+ * backstop.
  */
 const RESOLVE_PREFIX = 'dqa_artifact_resolve';
 
@@ -51,7 +54,7 @@ export class ArtifactStore {
     if (!pin) throw new Error(`pin ${pinId} not found`);
     pin.status = resolved ? 'resolved' : 'open';
     pin.resolvedNote = resolved ? resolvedNote : null;
-    saveResolvesFromSession(this.session, RESOLVE_PREFIX);
+    saveResolvedPin(this.session, RESOLVE_PREFIX, pin);
     this._changed('pin:resolve', { pinId });
     return pin;
   }

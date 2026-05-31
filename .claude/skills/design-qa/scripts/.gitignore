@@ -1,2 +1,10 @@
 node_modules/
 package-lock.json
+
+# Spike 11 (drawing/markup) throwaway POC + its output — never committed.
+spike11-poc.mjs
+spike11-poc-out/
+
+# Spike 12 (DOM-element inspector) throwaway POC + its output — never committed.
+spike12-poc.mjs
+spike12-poc-out/
